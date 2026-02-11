@@ -9,6 +9,7 @@ class CredentialType(Enum):
     API_KEY = "api_key"
     PERSONAL_ACCESS_TOKEN = "personal_access_token"
     OAUTH = "oauth"
+    OAUTH_AUTHORIZATION_CODE = "oauth_authorization_code"
     USERNAME_PASSWORD = "username_password"
     BROWSER_SESSION = "browser_session"
 
@@ -19,6 +20,7 @@ class CredentialType(Enum):
             CredentialType.API_KEY: ["API_KEY"],
             CredentialType.PERSONAL_ACCESS_TOKEN: ["PERSONAL_ACCESS_TOKEN"],
             CredentialType.OAUTH: ["CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN"],
+            CredentialType.OAUTH_AUTHORIZATION_CODE: ["CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN"],
             CredentialType.USERNAME_PASSWORD: ["USERNAME", "PASSWORD"],
             CredentialType.BROWSER_SESSION: ["USERNAME", "PASSWORD"],
         }[self]
@@ -33,13 +35,21 @@ class CredentialType(Enum):
                 "CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN",
                 "REFRESH_TOKEN", "TOKEN_EXPIRES_AT", "BASE_URL",
             ],
+            CredentialType.OAUTH_AUTHORIZATION_CODE: [
+                "CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN",
+                "REFRESH_TOKEN", "TOKEN_EXPIRES_AT", "REDIRECT_URI", "BASE_URL",
+            ],
             CredentialType.USERNAME_PASSWORD: ["USERNAME", "PASSWORD", "BASE_URL"],
             CredentialType.BROWSER_SESSION: ["USERNAME", "PASSWORD", "BASE_URL"],
         }[self]
 
     @property
     def login_prompts(self) -> list:
-        """Return (field_name, prompt_text, hide_input) tuples for interactive login."""
+        """Return (field_name, prompt_text, hide_input) tuples for interactive login.
+
+        For OAUTH_AUTHORIZATION_CODE, these are the setup prompts for app credentials.
+        The actual token acquisition happens via a login_handler callback (browser flow).
+        """
         return {
             CredentialType.API_KEY: [
                 ("API_KEY", "API key", True),
@@ -50,6 +60,11 @@ class CredentialType(Enum):
             CredentialType.OAUTH: [
                 ("CLIENT_ID", "Client ID", False),
                 ("CLIENT_SECRET", "Client secret", True),
+            ],
+            CredentialType.OAUTH_AUTHORIZATION_CODE: [
+                ("CLIENT_ID", "Client ID", False),
+                ("CLIENT_SECRET", "Client secret", True),
+                ("REDIRECT_URI", "Redirect URI", False),
             ],
             CredentialType.USERNAME_PASSWORD: [
                 ("USERNAME", "Username", False),
@@ -68,6 +83,7 @@ class CredentialType(Enum):
             CredentialType.API_KEY: ["API_KEY"],
             CredentialType.PERSONAL_ACCESS_TOKEN: ["PERSONAL_ACCESS_TOKEN"],
             CredentialType.OAUTH: ["CLIENT_SECRET", "ACCESS_TOKEN", "REFRESH_TOKEN"],
+            CredentialType.OAUTH_AUTHORIZATION_CODE: ["CLIENT_SECRET", "ACCESS_TOKEN", "REFRESH_TOKEN"],
             CredentialType.USERNAME_PASSWORD: ["PASSWORD"],
             CredentialType.BROWSER_SESSION: ["PASSWORD"],
         }[self]

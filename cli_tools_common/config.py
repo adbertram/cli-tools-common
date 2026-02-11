@@ -102,17 +102,15 @@ class BaseConfig:
         self.profile = profile
         self.env_file_path = self._resolve_env_file(profile)
 
-        # Clear standard credential env vars before loading to prevent
-        # stale values from a previously loaded profile
-        for field in self.CREDENTIAL_TYPE.all_fields:
-            os.environ.pop(field, None)
-        os.environ.pop("IS_DEFAULT_PROFILE", None)
-
         if self.env_file_path.exists():
+            # Clear standard credential env vars before loading to prevent
+            # stale values from a previously loaded profile
+            for field in self.CREDENTIAL_TYPE.all_fields:
+                os.environ.pop(field, None)
+            os.environ.pop("IS_DEFAULT_PROFILE", None)
             load_dotenv(self.env_file_path, override=True)
-        else:
-            self.env_file_path.parent.mkdir(parents=True, exist_ok=True)
-            self.env_file_path.touch()
+        # If no .env file exists, keep current env vars intact — supports
+        # running with credentials injected via environment (e.g., n8n nodes)
 
     def _resolve_env_file(self, profile: str = None) -> Path:
         """Resolve which .env file to load."""
@@ -225,6 +223,10 @@ class BaseConfig:
     @property
     def password(self) -> Optional[str]:
         return self._get("PASSWORD")
+
+    @property
+    def redirect_uri(self) -> Optional[str]:
+        return self._get("REDIRECT_URI")
 
     @property
     def base_url(self) -> str:

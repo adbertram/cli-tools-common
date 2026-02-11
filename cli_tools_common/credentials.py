@@ -7,6 +7,7 @@ class CredentialType(Enum):
     """Types of authentication credentials supported by CLI tools."""
 
     API_KEY = "api_key"
+    PERSONAL_ACCESS_TOKEN = "personal_access_token"
     OAUTH = "oauth"
     USERNAME_PASSWORD = "username_password"
     BROWSER_SESSION = "browser_session"
@@ -16,6 +17,7 @@ class CredentialType(Enum):
         """Fields that must be set for credentials to be valid."""
         return {
             CredentialType.API_KEY: ["API_KEY"],
+            CredentialType.PERSONAL_ACCESS_TOKEN: ["PERSONAL_ACCESS_TOKEN"],
             CredentialType.OAUTH: ["CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN"],
             CredentialType.USERNAME_PASSWORD: ["USERNAME", "PASSWORD"],
             CredentialType.BROWSER_SESSION: ["USERNAME", "PASSWORD"],
@@ -26,6 +28,7 @@ class CredentialType(Enum):
         """All fields associated with this credential type (for clearing)."""
         return {
             CredentialType.API_KEY: ["API_KEY", "BASE_URL"],
+            CredentialType.PERSONAL_ACCESS_TOKEN: ["PERSONAL_ACCESS_TOKEN", "BASE_URL"],
             CredentialType.OAUTH: [
                 "CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN",
                 "REFRESH_TOKEN", "TOKEN_EXPIRES_AT", "BASE_URL",
@@ -40,6 +43,9 @@ class CredentialType(Enum):
         return {
             CredentialType.API_KEY: [
                 ("API_KEY", "API key", True),
+            ],
+            CredentialType.PERSONAL_ACCESS_TOKEN: [
+                ("PERSONAL_ACCESS_TOKEN", "Personal access token", True),
             ],
             CredentialType.OAUTH: [
                 ("CLIENT_ID", "Client ID", False),
@@ -60,6 +66,7 @@ class CredentialType(Enum):
         """Fields that should be masked in status output."""
         return {
             CredentialType.API_KEY: ["API_KEY"],
+            CredentialType.PERSONAL_ACCESS_TOKEN: ["PERSONAL_ACCESS_TOKEN"],
             CredentialType.OAUTH: ["CLIENT_SECRET", "ACCESS_TOKEN", "REFRESH_TOKEN"],
             CredentialType.USERNAME_PASSWORD: ["PASSWORD"],
             CredentialType.BROWSER_SESSION: ["PASSWORD"],

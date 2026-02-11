@@ -203,6 +203,10 @@ class BaseConfig:
         return self._get("CLIENT_SECRET")
 
     @property
+    def personal_access_token(self) -> Optional[str]:
+        return self._get("PERSONAL_ACCESS_TOKEN")
+
+    @property
     def access_token(self) -> Optional[str]:
         return self._get("ACCESS_TOKEN")
 

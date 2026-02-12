@@ -30,7 +30,6 @@ def _handle_browser_login(config, tool_name: str, force: bool):
             print_success(f"Already authenticated ({tool_name} API + browser)")
         else:
             print_info("Opening browser for login...")
-            print_info("Log in manually, then close the browser when done.")
             result = browser.login(force=force)
             if result.get("success"):
                 print_success("Browser session authenticated")
@@ -113,10 +112,10 @@ def create_auth_app(
                 from .oauth import oauth_login
                 effective_handler = oauth_login
 
-            # Only pre-clear credentials for simple prompt-based login (no handler)
-            if force and effective_handler is None:
-                config.clear_credentials()
-                print_info("Existing credentials cleared")
+            # Force clears ephemeral state (tokens + browser session), not static creds
+            if force:
+                config.clear_ephemeral()
+                print_info("Existing sessions cleared")
 
             if effective_handler is not None:
                 # Custom or built-in OAuth login flow
@@ -138,11 +137,14 @@ def create_auth_app(
                 # Delegate to handler for token acquisition
                 effective_handler(config, force)
             else:
-                # Default prompt-based login
+                # Default prompt-based login — skip fields that already have values
+                # (force only clears ephemeral fields, so static creds remain)
+                prompted = False
                 for field_name, prompt_text, hide in combined_login_prompts(config._resolved_credential_types):
                     current = config._get(field_name)
-                    if current and not force:
+                    if current:
                         continue
+                    prompted = True
                     value = typer.prompt(f"Enter {prompt_text}", hide_input=hide)
                     if not value or not value.strip():
                         print_error(f"{prompt_text} cannot be empty")
@@ -152,7 +154,8 @@ def create_auth_app(
                 # Prompt for extra fields after standard prompts
                 _prompt_extra_fields(config, force)
 
-                print_success("Credentials saved successfully")
+                if prompted:
+                    print_success("Credentials saved successfully")
 
             # Browser session login (if configured and no custom handler)
             # Custom handlers manage their own browser flow
@@ -264,8 +267,25 @@ def create_auth_app(
         except Exception as e:
             raise typer.Exit(handle_error(e))
 
-    # Add test command if test_handler is provided
-    if test_handler is not None:
+    # Auto-detect test_connection on config if no explicit test_handler
+    effective_test_handler = test_handler
+
+    if effective_test_handler is None:
+        try:
+            from .config import BaseConfig
+            probe_config = get_config_fn()
+            if type(probe_config).test_connection is not BaseConfig.test_connection:
+                def _auto_test_handler(config):
+                    result = config.test_connection()
+                    if result is not None:
+                        return result
+                    return {"api_test": "skipped: no test_connection implemented"}
+                effective_test_handler = _auto_test_handler
+        except Exception:
+            pass
+
+    # Add test command if test_handler is provided or auto-detected
+    if effective_test_handler is not None:
         @app.command("test")
         def auth_test(
             table: bool = typer.Option(False, "--table", "-t", help="Display as table"),
@@ -282,7 +302,7 @@ def create_auth_app(
                 # 2. API test via CLI-provided callback
                 if result["credentials_configured"]:
                     try:
-                        api_result = test_handler(config)
+                        api_result = effective_test_handler(config)
                         result.update(api_result)
                     except Exception as e:
                         result["api_test"] = f"failed: {e}"

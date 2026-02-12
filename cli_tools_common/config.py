@@ -300,6 +300,13 @@ class BaseConfig:
         for field in combined_all_fields(self._resolved_credential_types):
             self._clear(field)
 
+    def clear_ephemeral(self):
+        """Clear ephemeral fields (tokens) and browser session. Preserves static credentials."""
+        from .credentials import combined_ephemeral_fields
+        for field in combined_ephemeral_fields(self._resolved_credential_types):
+            self._clear(field)
+        self.clear_session()
+
     # ==================== Profile Data Directories ====================
 
     def get_profiles_dir(self) -> Path:
@@ -341,6 +348,15 @@ class BaseConfig:
     def get_active_profile_name(self) -> str:
         """Get the name of the currently active profile."""
         return _profile_name_from_path(self.env_file_path)
+
+    def test_connection(self) -> Optional[dict]:
+        """Test API connectivity. Override in subclass to make a lightweight API call.
+
+        Returns:
+            dict with at minimum {"api_test": "passed"} or {"api_test": "failed: reason"},
+            or None if no test is implemented.
+        """
+        return None
 
     def get_browser(self):
         """Return browser service instance for browser-based authentication.

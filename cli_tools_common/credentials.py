@@ -77,6 +77,22 @@ class CredentialType(Enum):
         }[self]
 
     @property
+    def ephemeral_fields(self) -> list:
+        """Fields cleared on --force (tokens, transient auth state).
+
+        Static credentials (API keys, PATs, client IDs, passwords) are never
+        cleared by --force since they don't expire or change.
+        """
+        return {
+            CredentialType.API_KEY: [],
+            CredentialType.PERSONAL_ACCESS_TOKEN: [],
+            CredentialType.OAUTH: ["ACCESS_TOKEN", "REFRESH_TOKEN", "TOKEN_EXPIRES_AT"],
+            CredentialType.OAUTH_AUTHORIZATION_CODE: ["ACCESS_TOKEN", "REFRESH_TOKEN", "TOKEN_EXPIRES_AT"],
+            CredentialType.USERNAME_PASSWORD: [],
+            CredentialType.BROWSER_SESSION: [],
+        }[self]
+
+    @property
     def sensitive_fields(self) -> list:
         """Fields that should be masked in status output."""
         return {
@@ -138,6 +154,18 @@ def combined_login_prompts(cred_types: list) -> list:
             if prompt[0] not in seen:
                 seen.add(prompt[0])
                 result.append(prompt)
+    return result
+
+
+def combined_ephemeral_fields(cred_types: list) -> list:
+    """Deduplicated ephemeral fields across multiple credential types."""
+    seen = set()
+    result = []
+    for ct in cred_types:
+        for field in ct.ephemeral_fields:
+            if field not in seen:
+                seen.add(field)
+                result.append(field)
     return result
 
 

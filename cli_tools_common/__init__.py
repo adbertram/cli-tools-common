@@ -1,6 +1,19 @@
-"""Shared utilities for CLI tools: auth, profiles, config, output, OAuth."""
+"""Shared utilities for CLI tools: auth, profiles, config, output, OAuth, browser."""
 
 from .config import BaseConfig
+
+
+def __getattr__(name):
+    """Lazy-load browser automation to avoid requiring playwright for API-only CLIs."""
+    if name in ("BrowserAutomation", "BrowserAutomationError", "SessionData"):
+        from .browser_automation import BrowserAutomation, BrowserAutomationError, SessionData
+        _browser_exports = {
+            "BrowserAutomation": BrowserAutomation,
+            "BrowserAutomationError": BrowserAutomationError,
+            "SessionData": SessionData,
+        }
+        return _browser_exports[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 from .credentials import (
     CredentialType,
     mask_value,
@@ -27,6 +40,9 @@ from .output import (
 
 __all__ = [
     "BaseConfig",
+    "BrowserAutomation",
+    "BrowserAutomationError",
+    "SessionData",
     "CredentialType",
     "mask_value",
     "combined_required_fields",

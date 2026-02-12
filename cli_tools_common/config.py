@@ -6,7 +6,7 @@ from typing import Optional
 
 from dotenv import load_dotenv, set_key
 
-from .credentials import CredentialType
+from .credentials import CredentialType, combined_all_fields, combined_required_fields
 from .exceptions import ConfigError
 
 
@@ -66,14 +66,14 @@ def list_env_files(tool_dir: Path) -> list:
 class BaseConfig:
     """Base configuration with profile-aware env loading.
 
-    Subclasses set two class variables:
-        CREDENTIAL_TYPE: CredentialType enum value
+    Subclasses set class variables:
+        CREDENTIAL_TYPES: list of CredentialType values (AND — all must be satisfied)
         DEFAULT_BASE_URL: str fallback URL
 
     Example subclass (simple API key tool):
 
         class Config(BaseConfig):
-            CREDENTIAL_TYPE = CredentialType.API_KEY
+            CREDENTIAL_TYPES = [CredentialType.API_KEY]
             DEFAULT_BASE_URL = "https://api.example.com/v1"
 
             def __init__(self, profile=None):
@@ -83,8 +83,40 @@ class BaseConfig:
                 )
     """
 
-    CREDENTIAL_TYPE: CredentialType
+    CREDENTIAL_TYPE: CredentialType = None  # Deprecated: use CREDENTIAL_TYPES
+    CREDENTIAL_TYPES: list = None           # List of CredentialType values (AND)
     DEFAULT_BASE_URL: str = ""
+
+    # OAuth 2.0 configuration (set by subclasses that use OAuth)
+    OAUTH_AUTH_URL: str = ""              # Authorization endpoint
+    OAUTH_TOKEN_URL: str = ""            # Token endpoint
+    OAUTH_SCOPES: list = []              # Scope strings
+    OAUTH_REDIRECT_URI: str = ""         # Default redirect URI (overridable in .env via REDIRECT_URI)
+    OAUTH_PKCE: bool = False             # Enable PKCE (S256)
+    OAUTH_STATE: bool = False            # Generate + verify state parameter
+    OAUTH_TOKEN_AUTH: str = "body"       # "basic" | "body" | "none"
+    OAUTH_EXTRA_AUTH_PARAMS: dict = {}   # Extra params for auth URL (e.g. audience)
+    OAUTH_USE_PLAYWRIGHT: bool = False   # Use Playwright to capture redirect vs manual paste
+    OAUTH_PLAYWRIGHT_TIMEOUT: int = 120  # Seconds to wait for Playwright redirect
+
+    # Extra credential prompts (set by subclasses that need additional fields prompted during login)
+    # List of (field_name, prompt_label, hide_input) tuples
+    # Prompted AFTER standard credential prompts but BEFORE login_handler or browser login
+    AUTH_EXTRA_PROMPTS: list = []
+
+    @property
+    def _resolved_credential_types(self) -> list:
+        """Resolve credential types with backward compatibility.
+
+        Returns CREDENTIAL_TYPES if set, falls back to [CREDENTIAL_TYPE].
+        """
+        if self.CREDENTIAL_TYPES is not None:
+            return self.CREDENTIAL_TYPES
+        if self.CREDENTIAL_TYPE is not None:
+            return [self.CREDENTIAL_TYPE]
+        raise ConfigError(
+            "Subclass must set CREDENTIAL_TYPES (list) or CREDENTIAL_TYPE (deprecated)."
+        )
 
     def __init__(self, tool_dir: Path, profile: str = None):
         """Initialize config by resolving the profile and loading the env file.
@@ -105,7 +137,7 @@ class BaseConfig:
         if self.env_file_path.exists():
             # Clear standard credential env vars before loading to prevent
             # stale values from a previously loaded profile
-            for field in self.CREDENTIAL_TYPE.all_fields:
+            for field in combined_all_fields(self._resolved_credential_types):
                 os.environ.pop(field, None)
             os.environ.pop("IS_DEFAULT_PROFILE", None)
             load_dotenv(self.env_file_path, override=True)
@@ -236,16 +268,17 @@ class BaseConfig:
 
     def has_credentials(self) -> bool:
         """Check if required credentials are set."""
-        if self.CREDENTIAL_TYPE == CredentialType.BROWSER_SESSION:
+        cred_types = self._resolved_credential_types
+        if CredentialType.BROWSER_SESSION in cred_types:
             return (
-                all(self._get(f) for f in self.CREDENTIAL_TYPE.required_fields)
+                all(self._get(f) for f in combined_required_fields(cred_types))
                 or self.has_saved_session()
             )
-        return all(self._get(f) for f in self.CREDENTIAL_TYPE.required_fields)
+        return all(self._get(f) for f in combined_required_fields(cred_types))
 
     def get_missing_credentials(self) -> list:
         """Get list of missing required credential field names."""
-        return [f for f in self.CREDENTIAL_TYPE.required_fields if not self._get(f)]
+        return [f for f in combined_required_fields(self._resolved_credential_types) if not self._get(f)]
 
     def save_api_key(self, api_key: str):
         """Save API key credential."""
@@ -264,7 +297,7 @@ class BaseConfig:
 
     def clear_credentials(self):
         """Clear all credential fields for this credential type."""
-        for field in self.CREDENTIAL_TYPE.all_fields:
+        for field in combined_all_fields(self._resolved_credential_types):
             self._clear(field)
 
     # ==================== Profile Data Directories ====================
@@ -308,3 +341,18 @@ class BaseConfig:
     def get_active_profile_name(self) -> str:
         """Get the name of the currently active profile."""
         return _profile_name_from_path(self.env_file_path)
+
+    def get_browser(self):
+        """Return browser service instance for browser-based authentication.
+
+        Override in CLI Config subclasses that require browser session authentication
+        (in addition to or instead of API credentials).
+
+        The returned object must implement:
+        - is_authenticated() -> bool
+        - login(force: bool) -> dict with 'success' key
+        - close() -> None
+
+        Returns None if browser auth is not needed.
+        """
+        return None

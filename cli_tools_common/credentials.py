@@ -103,3 +103,51 @@ def mask_value(value: str) -> str:
     if not value or len(value) <= 8:
         return "***"
     return f"{value[:4]}...{value[-4:]}"
+
+
+def combined_required_fields(cred_types: list) -> list:
+    """Deduplicated required fields across multiple credential types."""
+    seen = set()
+    result = []
+    for ct in cred_types:
+        for field in ct.required_fields:
+            if field not in seen:
+                seen.add(field)
+                result.append(field)
+    return result
+
+
+def combined_all_fields(cred_types: list) -> list:
+    """Deduplicated all fields across multiple credential types."""
+    seen = set()
+    result = []
+    for ct in cred_types:
+        for field in ct.all_fields:
+            if field not in seen:
+                seen.add(field)
+                result.append(field)
+    return result
+
+
+def combined_login_prompts(cred_types: list) -> list:
+    """Deduplicated login prompts across multiple credential types (by field_name)."""
+    seen = set()
+    result = []
+    for ct in cred_types:
+        for prompt in ct.login_prompts:
+            if prompt[0] not in seen:
+                seen.add(prompt[0])
+                result.append(prompt)
+    return result
+
+
+def combined_sensitive_fields(cred_types: list) -> list:
+    """Deduplicated sensitive fields across multiple credential types."""
+    seen = set()
+    result = []
+    for ct in cred_types:
+        for field in ct.sensitive_fields:
+            if field not in seen:
+                seen.add(field)
+                result.append(field)
+    return result

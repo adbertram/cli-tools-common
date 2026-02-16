@@ -55,6 +55,20 @@ def _check_browser_status(config) -> Optional[bool]:
             pass
 
 
+def _resolve_credential_type(config, credential_type_str: str):
+    """Resolve a credential type string to a CredentialType enum, validating it's configured."""
+    cred_types = config._resolved_credential_types
+    if len(cred_types) < 2:
+        print_error("--credential-type is only valid for CLIs with multiple credential types")
+        raise typer.Exit(1)
+    for ct in cred_types:
+        if ct.value == credential_type_str:
+            return ct
+    valid = ", ".join(ct.value for ct in cred_types)
+    print_error(f"Unknown credential type '{credential_type_str}'. Valid types: {valid}")
+    raise typer.Exit(1)
+
+
 def create_auth_app(
     get_config_fn,
     tool_name: str = "tool",
@@ -97,6 +111,10 @@ def create_auth_app(
         force: bool = typer.Option(
             False, "--force", "-F", help="Clear existing credentials and re-authenticate"
         ),
+        credential_type: Optional[str] = typer.Option(
+            None, "--credential-type", "-c",
+            help="Authenticate only this credential type (e.g., 'oauth', 'browser_session')"
+        ),
     ):
         """Configure authentication credentials.
 
@@ -106,6 +124,14 @@ def create_auth_app(
         try:
             config = get_config_fn(profile=profile)
 
+            # Resolve scoped credential type if specified
+            resolved_type = None
+            if credential_type:
+                resolved_type = _resolve_credential_type(config, credential_type)
+
+            # Determine which credential types to process
+            active_types = [resolved_type] if resolved_type else config._resolved_credential_types
+
             # Resolve effective handler (3-way)
             effective_handler = login_handler
             if effective_handler is None and config.OAUTH_AUTH_URL and config.OAUTH_TOKEN_URL:
@@ -114,14 +140,22 @@ def create_auth_app(
 
             # Force clears ephemeral state (tokens + browser session), not static creds
             if force:
-                config.clear_ephemeral()
+                if resolved_type:
+                    config.clear_ephemeral_for_type(resolved_type)
+                else:
+                    config.clear_ephemeral()
                 print_info("Existing sessions cleared")
+
+            # Browser session only — skip all prompts, go directly to browser login
+            if resolved_type == CredentialType.BROWSER_SESSION:
+                _handle_browser_login(config, tool_name, force)
+                return
 
             if effective_handler is not None:
                 # Custom or built-in OAuth login flow
                 # Ensure setup fields (CLIENT_ID, etc.) are configured first
                 # Always skip if already set - handler controls force behavior
-                for field_name, prompt_text, hide in combined_login_prompts(config._resolved_credential_types):
+                for field_name, prompt_text, hide in combined_login_prompts(active_types):
                     current = config._get(field_name)
                     if current:
                         continue
@@ -140,7 +174,7 @@ def create_auth_app(
                 # Default prompt-based login — skip fields that already have values
                 # (force only clears ephemeral fields, so static creds remain)
                 prompted = False
-                for field_name, prompt_text, hide in combined_login_prompts(config._resolved_credential_types):
+                for field_name, prompt_text, hide in combined_login_prompts(active_types):
                     current = config._get(field_name)
                     if current:
                         continue
@@ -159,8 +193,10 @@ def create_auth_app(
 
             # Browser session login (if configured and no custom handler)
             # Custom handlers manage their own browser flow
+            # Skip if --credential-type is set and it's not BROWSER_SESSION
             if effective_handler is None or effective_handler is not login_handler:
-                _handle_browser_login(config, tool_name, force)
+                if not resolved_type or resolved_type == CredentialType.BROWSER_SESSION:
+                    _handle_browser_login(config, tool_name, force)
 
         except typer.Exit:
             raise

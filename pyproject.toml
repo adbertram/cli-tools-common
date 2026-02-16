@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cli-tools-common"
-version = "0.1.0"
+version = "0.1.1"
 description = "Shared authentication, profiles, and output utilities for CLI tools"
 requires-python = ">=3.9"
 dependencies = [

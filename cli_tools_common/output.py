@@ -149,6 +149,7 @@ def print_json(data: Any, indent: int = 2, exclude_none: bool = False):
     """Print data as JSON to stdout.
 
     Handles Pydantic models (including nested), dicts, lists, and enums.
+    Auto-injects ``cache_hit`` when the last method call used @cached.
 
     Args:
         data: Data to print (model, dict, list of models/dicts).
@@ -159,6 +160,16 @@ def print_json(data: Any, indent: int = 2, exclude_none: bool = False):
         output = data.model_dump(exclude_none=True)
     else:
         output = _serialize_for_json(data)
+
+    # Auto-inject cache_hit from @cached decorator state
+    from cli_tools_common.data_cache import get_cache_hit, reset_cache_hit
+    cache_hit = get_cache_hit()
+    if cache_hit is not None:
+        if isinstance(output, dict):
+            output = {"cache_hit": cache_hit, **output}
+        elif isinstance(output, list):
+            output = {"cache_hit": cache_hit, "results": output}
+        reset_cache_hit()
 
     print(json.dumps(output, indent=indent, ensure_ascii=False, default=str))
 

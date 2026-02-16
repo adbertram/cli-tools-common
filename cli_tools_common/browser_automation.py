@@ -21,12 +21,24 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-# Suppress Node.js url.parse() deprecation warning from Playwright internals
-os.environ.setdefault("NODE_OPTIONS", "--no-deprecation")
+if TYPE_CHECKING:
+    from playwright.sync_api import Page, BrowserContext
 
-from playwright.sync_api import sync_playwright, Page, BrowserContext
+
+def _ensure_playwright():
+    """Import playwright at runtime, raising a clear error if not installed."""
+    try:
+        # Suppress Node.js url.parse() deprecation warning from Playwright internals
+        os.environ.setdefault("NODE_OPTIONS", "--no-deprecation")
+        from playwright.sync_api import sync_playwright, Page, BrowserContext
+        return sync_playwright, Page, BrowserContext
+    except ImportError:
+        raise ImportError(
+            "playwright is required for browser automation. "
+            "Install it with: pip install playwright && playwright install chromium"
+        )
 
 
 class BrowserAutomationError(Exception):
@@ -130,8 +142,8 @@ class BrowserAutomation:
         self.config = config
         self._playwright = None
         self._browser = None
-        self._context: Optional[BrowserContext] = None
-        self._page: Optional[Page] = None
+        self._context: Optional["BrowserContext"] = None
+        self._page: Optional["Page"] = None
         self._chrome_process = None
         self._connected_to_existing = False
 
@@ -222,6 +234,7 @@ class BrowserAutomation:
 
         # Connect to Chrome via CDP
         cdp_url = f"http://localhost:{self.CDP_PORT}"
+        sync_playwright, _, _ = _ensure_playwright()
         self._playwright = sync_playwright().start()
         self._chrome_process = None
         self._connected_to_existing = False
@@ -258,7 +271,7 @@ class BrowserAutomation:
 
         return self._wait_for_login_and_capture()
 
-    def get_page(self, url: str = None) -> Page:
+    def get_page(self, url: str = None) -> "Page":
         """Get headless Playwright page with full session restored.
 
         On first call, launches headless browser, restores cookies, navigates
@@ -343,7 +356,7 @@ class BrowserAutomation:
                 f"Corrupt session file: {e}", cause=e
             )
 
-    def restore_session(self, page: Page) -> None:
+    def restore_session(self, page: "Page") -> None:
         """Restore full state to a page (must be navigated to target origin first)."""
         if not self.has_session():
             raise BrowserAutomationError("No session to restore")
@@ -455,7 +468,7 @@ class BrowserAutomation:
 
     # ==================== Overridable Hooks (Template Method) ====================
 
-    def _is_login_page(self, page: Page) -> bool:
+    def _is_login_page(self, page: "Page") -> bool:
         """Check if page is on the login page.
 
         Default: regex ``AUTH_URL_PATTERN`` against ``page.url``.
@@ -465,7 +478,7 @@ class BrowserAutomation:
             return bool(re.search(self.AUTH_URL_PATTERN, page.url))
         return False
 
-    def _is_authenticated_page(self, page: Page) -> bool:
+    def _is_authenticated_page(self, page: "Page") -> bool:
         """Check if page shows authenticated state.
 
         Checks in order:
@@ -482,7 +495,7 @@ class BrowserAutomation:
             return bool(re.search(self.AUTH_SUCCESS_URL, page.url))
         return not self._is_login_page(page)
 
-    def _on_authenticated(self, page: Page) -> None:
+    def _on_authenticated(self, page: "Page") -> None:
         """Called after successful authentication. Override to capture extra state."""
         pass
 
@@ -588,12 +601,14 @@ class BrowserAutomation:
 
     def _init_headless_browser(self) -> None:
         """Launch headless Playwright browser with anti-detection args."""
+        sync_playwright, _, _ = _ensure_playwright()
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(
             headless=True,
             channel="chrome",
             args=["--disable-blink-features=AutomationControlled"],
         )
+
         self._context = self._browser.new_context()
         self._page = self._context.new_page()
 
@@ -660,7 +675,7 @@ class BrowserAutomation:
     # Ported from BrickFreedom CLI auth.py (battle-tested across 6+ CLIs)
 
     @staticmethod
-    def _get_storage(page: Page, storage_type: str) -> Dict[str, str]:
+    def _get_storage(page: "Page", storage_type: str) -> Dict[str, str]:
         """Get localStorage or sessionStorage contents."""
         return page.evaluate(
             f"""() => {{
@@ -675,7 +690,7 @@ class BrowserAutomation:
         )
 
     @staticmethod
-    def _get_indexeddb(page: Page) -> Dict[str, Any]:
+    def _get_indexeddb(page: "Page") -> Dict[str, Any]:
         """Capture all IndexedDB databases and their contents.
 
         Binary data (ArrayBuffer) is converted to base64.
@@ -754,7 +769,7 @@ class BrowserAutomation:
         )
 
     @staticmethod
-    def _restore_indexeddb(page: Page, data: Dict[str, Any]) -> None:
+    def _restore_indexeddb(page: "Page", data: Dict[str, Any]) -> None:
         """Restore IndexedDB data from captured state.
 
         Recreates databases, object stores, and records.
@@ -837,7 +852,7 @@ class BrowserAutomation:
             data,
         )
 
-    def _restore_storage(self, page: Page, session: SessionData) -> None:
+    def _restore_storage(self, page: "Page", session: SessionData) -> None:
         """Restore localStorage, sessionStorage, and IndexedDB to a page.
 
         Page must already be navigated to the target origin (these are

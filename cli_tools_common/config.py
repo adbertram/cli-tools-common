@@ -264,6 +264,14 @@ class BaseConfig:
     def base_url(self) -> str:
         return self._get("BASE_URL") or self.DEFAULT_BASE_URL
 
+    @property
+    def cache_enabled(self) -> bool:
+        return (self._get("CACHE_ENABLED") or "true").lower() in ("true", "1", "yes")
+
+    @property
+    def cache_ttl(self) -> int:
+        return int(self._get("CACHE_TTL") or "3600")
+
     # ==================== Credential Management ====================
 
     def has_credentials(self) -> bool:
@@ -306,6 +314,14 @@ class BaseConfig:
         for field in combined_ephemeral_fields(self._resolved_credential_types):
             self._clear(field)
         self.clear_session()
+
+    def clear_ephemeral_for_type(self, cred_type: 'CredentialType'):
+        """Clear ephemeral fields for a single credential type."""
+        from .credentials import CredentialType
+        for field in cred_type.ephemeral_fields:
+            self._clear(field)
+        if cred_type == CredentialType.BROWSER_SESSION:
+            self.clear_session()
 
     # ==================== Profile Data Directories ====================
 

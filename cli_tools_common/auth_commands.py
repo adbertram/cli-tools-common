@@ -155,7 +155,7 @@ def create_auth_app(
                 # Custom or built-in OAuth login flow
                 # Ensure setup fields (CLIENT_ID, etc.) are configured first
                 # Always skip if already set - handler controls force behavior
-                for field_name, prompt_text, hide in combined_login_prompts(active_types):
+                for field_name, prompt_text, hide in combined_login_prompts(active_types, config=config):
                     current = config._get(field_name)
                     if current:
                         continue
@@ -174,7 +174,7 @@ def create_auth_app(
                 # Default prompt-based login — skip fields that already have values
                 # (force only clears ephemeral fields, so static creds remain)
                 prompted = False
-                for field_name, prompt_text, hide in combined_login_prompts(active_types):
+                for field_name, prompt_text, hide in combined_login_prompts(active_types, config=config):
                     current = config._get(field_name)
                     if current:
                         continue
@@ -238,7 +238,7 @@ def create_auth_app(
                 }
 
                 # Add masked credential fields
-                for field in combined_required_fields(config._resolved_credential_types):
+                for field in combined_required_fields(config._resolved_credential_types, config=config):
                     value = config._get(field)
                     if value:
                         status_data[field.lower()] = mask_value(value)

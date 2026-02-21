@@ -12,6 +12,7 @@ class CredentialType(Enum):
     OAUTH_AUTHORIZATION_CODE = "oauth_authorization_code"
     USERNAME_PASSWORD = "username_password"
     BROWSER_SESSION = "browser_session"
+    CUSTOM = "custom"
 
     @property
     def required_fields(self) -> list:
@@ -23,6 +24,7 @@ class CredentialType(Enum):
             CredentialType.OAUTH_AUTHORIZATION_CODE: ["CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN"],
             CredentialType.USERNAME_PASSWORD: ["USERNAME", "PASSWORD"],
             CredentialType.BROWSER_SESSION: ["USERNAME", "PASSWORD"],
+            CredentialType.CUSTOM: [],
         }[self]
 
     @property
@@ -41,6 +43,7 @@ class CredentialType(Enum):
             ],
             CredentialType.USERNAME_PASSWORD: ["USERNAME", "PASSWORD", "BASE_URL"],
             CredentialType.BROWSER_SESSION: ["USERNAME", "PASSWORD", "BASE_URL"],
+            CredentialType.CUSTOM: [],
         }[self]
 
     @property
@@ -74,6 +77,7 @@ class CredentialType(Enum):
                 ("USERNAME", "Username", False),
                 ("PASSWORD", "Password", True),
             ],
+            CredentialType.CUSTOM: [],
         }[self]
 
     @property
@@ -90,6 +94,7 @@ class CredentialType(Enum):
             CredentialType.OAUTH_AUTHORIZATION_CODE: ["ACCESS_TOKEN", "REFRESH_TOKEN", "TOKEN_EXPIRES_AT"],
             CredentialType.USERNAME_PASSWORD: [],
             CredentialType.BROWSER_SESSION: [],
+            CredentialType.CUSTOM: [],
         }[self]
 
     @property
@@ -102,6 +107,7 @@ class CredentialType(Enum):
             CredentialType.OAUTH_AUTHORIZATION_CODE: ["CLIENT_SECRET", "ACCESS_TOKEN", "REFRESH_TOKEN"],
             CredentialType.USERNAME_PASSWORD: ["PASSWORD"],
             CredentialType.BROWSER_SESSION: ["PASSWORD"],
+            CredentialType.CUSTOM: [],
         }[self]
 
 
@@ -121,60 +127,80 @@ def mask_value(value: str) -> str:
     return f"{value[:4]}...{value[-4:]}"
 
 
-def combined_required_fields(cred_types: list) -> list:
+def combined_required_fields(cred_types: list, config=None) -> list:
     """Deduplicated required fields across multiple credential types."""
     seen = set()
     result = []
     for ct in cred_types:
-        for field in ct.required_fields:
+        if ct == CredentialType.CUSTOM and config is not None:
+            fields = config.CUSTOM_REQUIRED_FIELDS
+        else:
+            fields = ct.required_fields
+        for field in fields:
             if field not in seen:
                 seen.add(field)
                 result.append(field)
     return result
 
 
-def combined_all_fields(cred_types: list) -> list:
+def combined_all_fields(cred_types: list, config=None) -> list:
     """Deduplicated all fields across multiple credential types."""
     seen = set()
     result = []
     for ct in cred_types:
-        for field in ct.all_fields:
+        if ct == CredentialType.CUSTOM and config is not None:
+            fields = config.CUSTOM_ALL_FIELDS
+        else:
+            fields = ct.all_fields
+        for field in fields:
             if field not in seen:
                 seen.add(field)
                 result.append(field)
     return result
 
 
-def combined_login_prompts(cred_types: list) -> list:
+def combined_login_prompts(cred_types: list, config=None) -> list:
     """Deduplicated login prompts across multiple credential types (by field_name)."""
     seen = set()
     result = []
     for ct in cred_types:
-        for prompt in ct.login_prompts:
+        if ct == CredentialType.CUSTOM and config is not None:
+            prompts = config.CUSTOM_LOGIN_PROMPTS
+        else:
+            prompts = ct.login_prompts
+        for prompt in prompts:
             if prompt[0] not in seen:
                 seen.add(prompt[0])
                 result.append(prompt)
     return result
 
 
-def combined_ephemeral_fields(cred_types: list) -> list:
+def combined_ephemeral_fields(cred_types: list, config=None) -> list:
     """Deduplicated ephemeral fields across multiple credential types."""
     seen = set()
     result = []
     for ct in cred_types:
-        for field in ct.ephemeral_fields:
+        if ct == CredentialType.CUSTOM and config is not None:
+            fields = config.CUSTOM_EPHEMERAL_FIELDS
+        else:
+            fields = ct.ephemeral_fields
+        for field in fields:
             if field not in seen:
                 seen.add(field)
                 result.append(field)
     return result
 
 
-def combined_sensitive_fields(cred_types: list) -> list:
+def combined_sensitive_fields(cred_types: list, config=None) -> list:
     """Deduplicated sensitive fields across multiple credential types."""
     seen = set()
     result = []
     for ct in cred_types:
-        for field in ct.sensitive_fields:
+        if ct == CredentialType.CUSTOM and config is not None:
+            fields = config.CUSTOM_SENSITIVE_FIELDS
+        else:
+            fields = ct.sensitive_fields
+        for field in fields:
             if field not in seen:
                 seen.add(field)
                 result.append(field)

@@ -104,6 +104,13 @@ class BaseConfig:
     # Prompted AFTER standard credential prompts but BEFORE login_handler or browser login
     AUTH_EXTRA_PROMPTS: list = []
 
+    # Custom credential type field definitions (only used when CREDENTIAL_TYPES includes CUSTOM)
+    CUSTOM_REQUIRED_FIELDS: list = []
+    CUSTOM_ALL_FIELDS: list = []
+    CUSTOM_LOGIN_PROMPTS: list = []
+    CUSTOM_EPHEMERAL_FIELDS: list = []
+    CUSTOM_SENSITIVE_FIELDS: list = []
+
     @property
     def _resolved_credential_types(self) -> list:
         """Resolve credential types with backward compatibility.
@@ -137,7 +144,7 @@ class BaseConfig:
         if self.env_file_path.exists():
             # Clear standard credential env vars before loading to prevent
             # stale values from a previously loaded profile
-            for field in combined_all_fields(self._resolved_credential_types):
+            for field in combined_all_fields(self._resolved_credential_types, config=self):
                 os.environ.pop(field, None)
             os.environ.pop("IS_DEFAULT_PROFILE", None)
             load_dotenv(self.env_file_path, override=True)
@@ -279,14 +286,14 @@ class BaseConfig:
         cred_types = self._resolved_credential_types
         if CredentialType.BROWSER_SESSION in cred_types:
             return (
-                all(self._get(f) for f in combined_required_fields(cred_types))
+                all(self._get(f) for f in combined_required_fields(cred_types, config=self))
                 or self.has_saved_session()
             )
-        return all(self._get(f) for f in combined_required_fields(cred_types))
+        return all(self._get(f) for f in combined_required_fields(cred_types, config=self))
 
     def get_missing_credentials(self) -> list:
         """Get list of missing required credential field names."""
-        return [f for f in combined_required_fields(self._resolved_credential_types) if not self._get(f)]
+        return [f for f in combined_required_fields(self._resolved_credential_types, config=self) if not self._get(f)]
 
     def save_api_key(self, api_key: str):
         """Save API key credential."""
@@ -305,20 +312,24 @@ class BaseConfig:
 
     def clear_credentials(self):
         """Clear all credential fields for this credential type."""
-        for field in combined_all_fields(self._resolved_credential_types):
+        for field in combined_all_fields(self._resolved_credential_types, config=self):
             self._clear(field)
 
     def clear_ephemeral(self):
         """Clear ephemeral fields (tokens) and browser session. Preserves static credentials."""
         from .credentials import combined_ephemeral_fields
-        for field in combined_ephemeral_fields(self._resolved_credential_types):
+        for field in combined_ephemeral_fields(self._resolved_credential_types, config=self):
             self._clear(field)
         self.clear_session()
 
     def clear_ephemeral_for_type(self, cred_type: 'CredentialType'):
         """Clear ephemeral fields for a single credential type."""
         from .credentials import CredentialType
-        for field in cred_type.ephemeral_fields:
+        if cred_type == CredentialType.CUSTOM:
+            fields = self.CUSTOM_EPHEMERAL_FIELDS
+        else:
+            fields = cred_type.ephemeral_fields
+        for field in fields:
             self._clear(field)
         if cred_type == CredentialType.BROWSER_SESSION:
             self.clear_session()

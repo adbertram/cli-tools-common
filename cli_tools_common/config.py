@@ -285,10 +285,10 @@ class BaseConfig:
         """Check if required credentials are set."""
         cred_types = self._resolved_credential_types
         if CredentialType.BROWSER_SESSION in cred_types:
-            return (
-                all(self._get(f) for f in combined_required_fields(cred_types, config=self))
-                or self.has_saved_session()
-            )
+            # Browser session: require saved session profile + any non-browser credential fields
+            non_browser_types = [ct for ct in cred_types if ct != CredentialType.BROWSER_SESSION]
+            non_browser_ok = all(self._get(f) for f in combined_required_fields(non_browser_types, config=self))
+            return non_browser_ok and self.has_saved_session()
         return all(self._get(f) for f in combined_required_fields(cred_types, config=self))
 
     def get_missing_credentials(self) -> list:
@@ -355,7 +355,12 @@ class BaseConfig:
 
     def has_saved_session(self) -> bool:
         """Check if a saved browser session exists for the active profile."""
-        browser_dir = self.get_profile_data_dir() / "browser-data"
+        profile_dir = self.get_profile_data_dir()
+        # New browser template: profile.json in profile data dir
+        if (profile_dir / "profile.json").exists():
+            return True
+        # Old BrowserAutomation pattern: browser-data subdirectory
+        browser_dir = profile_dir / "browser-data"
         return browser_dir.exists() and any(browser_dir.iterdir())
 
     def clear_session(self):

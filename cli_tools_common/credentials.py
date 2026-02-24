@@ -23,7 +23,7 @@ class CredentialType(Enum):
             CredentialType.OAUTH: ["CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN"],
             CredentialType.OAUTH_AUTHORIZATION_CODE: ["CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN"],
             CredentialType.USERNAME_PASSWORD: ["USERNAME", "PASSWORD"],
-            CredentialType.BROWSER_SESSION: ["USERNAME", "PASSWORD"],
+            CredentialType.BROWSER_SESSION: [],
             CredentialType.CUSTOM: [],
         }[self]
 
@@ -42,7 +42,7 @@ class CredentialType(Enum):
                 "REFRESH_TOKEN", "TOKEN_EXPIRES_AT", "REDIRECT_URI", "BASE_URL",
             ],
             CredentialType.USERNAME_PASSWORD: ["USERNAME", "PASSWORD", "BASE_URL"],
-            CredentialType.BROWSER_SESSION: ["USERNAME", "PASSWORD", "BASE_URL"],
+            CredentialType.BROWSER_SESSION: ["BASE_URL"],
             CredentialType.CUSTOM: [],
         }[self]
 
@@ -73,10 +73,7 @@ class CredentialType(Enum):
                 ("USERNAME", "Username", False),
                 ("PASSWORD", "Password", True),
             ],
-            CredentialType.BROWSER_SESSION: [
-                ("USERNAME", "Username", False),
-                ("PASSWORD", "Password", True),
-            ],
+            CredentialType.BROWSER_SESSION: [],
             CredentialType.CUSTOM: [],
         }[self]
 
@@ -106,7 +103,7 @@ class CredentialType(Enum):
             CredentialType.OAUTH: ["CLIENT_SECRET", "ACCESS_TOKEN", "REFRESH_TOKEN"],
             CredentialType.OAUTH_AUTHORIZATION_CODE: ["CLIENT_SECRET", "ACCESS_TOKEN", "REFRESH_TOKEN"],
             CredentialType.USERNAME_PASSWORD: ["PASSWORD"],
-            CredentialType.BROWSER_SESSION: ["PASSWORD"],
+            CredentialType.BROWSER_SESSION: [],
             CredentialType.CUSTOM: [],
         }[self]
 

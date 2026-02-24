@@ -27,7 +27,7 @@ def _handle_browser_login(config, tool_name: str, force: bool):
         return
     try:
         if not force and browser.is_authenticated():
-            print_success(f"Already authenticated ({tool_name} API + browser)")
+            print_success(f"Already authenticated ({tool_name} browser session)")
         else:
             print_info("Opening browser for login...")
             result = browser.login(force=force)
@@ -115,6 +115,26 @@ def create_auth_app(
             None, "--credential-type", "-c",
             help="Authenticate only this credential type (e.g., 'oauth', 'browser_session')"
         ),
+        dataverse_environment_url: Optional[str] = typer.Option(
+            None, "--dataverse-environment-url",
+            help="Set DATAVERSE_URL before login (Copilot CLI)"
+        ),
+        dataverse_environment_id: Optional[str] = typer.Option(
+            None, "--dataverse-environment-id",
+            help="Set DATAVERSE_ENVIRONMENT_ID before login (Copilot CLI)"
+        ),
+        azure_tenant_id: Optional[str] = typer.Option(
+            None, "--azure-tenant-id",
+            help="Set AZURE_TENANT_ID before login (Copilot CLI)"
+        ),
+        azure_client_id: Optional[str] = typer.Option(
+            None, "--azure-client-id",
+            help="Set AZURE_CLIENT_ID before login (Copilot CLI)"
+        ),
+        azure_client_secret: Optional[str] = typer.Option(
+            None, "--azure-client-secret",
+            help="Set AZURE_CLIENT_SECRET before login (Copilot CLI)"
+        ),
     ):
         """Configure authentication credentials.
 
@@ -123,6 +143,19 @@ def create_auth_app(
         """
         try:
             config = get_config_fn(profile=profile)
+
+            # Optional pre-seeding for CLIs that use Dataverse custom credentials.
+            # Values are persisted so prompt-based login can stay non-interactive.
+            if dataverse_environment_url is not None:
+                config._set("DATAVERSE_URL", dataverse_environment_url.strip())
+            if dataverse_environment_id is not None:
+                config._set("DATAVERSE_ENVIRONMENT_ID", dataverse_environment_id.strip())
+            if azure_tenant_id is not None:
+                config._set("AZURE_TENANT_ID", azure_tenant_id.strip())
+            if azure_client_id is not None:
+                config._set("AZURE_CLIENT_ID", azure_client_id.strip())
+            if azure_client_secret is not None:
+                config._set("AZURE_CLIENT_SECRET", azure_client_secret.strip())
 
             # Resolve scoped credential type if specified
             resolved_type = None

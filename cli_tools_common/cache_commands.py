@@ -45,7 +45,6 @@ def create_cache_app(get_config_fn):
                     count += 1
 
             print_json({"files_removed": count, "bytes_freed": total_bytes})
-            print_success(f"Cleared {count} cached responses ({total_bytes:,} bytes freed)")
 
         except typer.Exit:
             raise

@@ -128,18 +128,34 @@ def print_table(
     console.print(table)
 
 
+def _sanitize_surrogates(s: str) -> str:
+    """Remove surrogate characters from a string.
+
+    Surrogate pairs (U+D800-U+DFFF) are invalid in isolation and cause
+    UnicodeEncodeError when printing to stdout. This encodes with
+    'surrogatepass' then decodes with 'replace' to substitute them.
+    """
+    return s.encode("utf-8", errors="surrogatepass").decode("utf-8", errors="replace")
+
+
 def _serialize_for_json(obj: Any) -> Any:
-    """Recursively serialize objects for JSON output, handling Pydantic models."""
-    if isinstance(obj, BaseModel):
-        return obj.model_dump()
+    """Recursively serialize objects for JSON output, handling Pydantic models.
+
+    Also sanitizes strings to remove invalid surrogate characters that would
+    cause UnicodeEncodeError when printing.
+    """
+    if isinstance(obj, str):
+        return _sanitize_surrogates(obj)
+    elif isinstance(obj, BaseModel):
+        return _serialize_for_json(obj.model_dump())
     elif hasattr(obj, "model_dump"):
-        return obj.model_dump()
+        return _serialize_for_json(obj.model_dump())
     elif hasattr(obj, "dict") and not isinstance(obj, dict):
-        return obj.dict()
+        return _serialize_for_json(obj.dict())
     elif isinstance(obj, list):
         return [_serialize_for_json(item) for item in obj]
     elif isinstance(obj, dict):
-        return {k: _serialize_for_json(v) for k, v in obj.items()}
+        return {_sanitize_surrogates(k) if isinstance(k, str) else k: _serialize_for_json(v) for k, v in obj.items()}
     elif hasattr(obj, "value"):
         return obj.value
     return obj

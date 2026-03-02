@@ -4,16 +4,33 @@ from .config import BaseConfig
 
 
 def __getattr__(name):
-    """Lazy-load browser automation to avoid requiring playwright for API-only CLIs."""
-    if name in ("BrowserAutomation", "BrowserAutomationError", "SessionData"):
-        from .browser_automation import BrowserAutomation, BrowserAutomationError, SessionData
+    """Lazy-load browser modules."""
+    if name in ("BrowserAutomation", "BrowserAutomationError"):
+        from .browser_automation import BrowserAutomation, BrowserAutomationError
         _browser_exports = {
             "BrowserAutomation": BrowserAutomation,
             "BrowserAutomationError": BrowserAutomationError,
-            "SessionData": SessionData,
         }
         return _browser_exports[name]
+    if name == "CLIPage":
+        from .cli_page import CLIPage
+        return CLIPage
+    if name == "PlaywrightCLIBrowser":
+        from .playwright_browser import PlaywrightCLIBrowser
+        return PlaywrightCLIBrowser
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+from .filters import (
+    FilterValidationError,
+    apply_filters,
+    apply_properties_filter,
+    apply_limit,
+    get_nested_value,
+    validate_filters,
+    parse_filter_string,
+)
+from .filter_map import FilterMap
+from .bulk import BulkProcessor
+from .models import CLIModel
 from .credentials import (
     CredentialType,
     mask_value,
@@ -39,10 +56,26 @@ from .output import (
 )
 
 __all__ = [
+    # Filters
+    "FilterValidationError",
+    "apply_filters",
+    "apply_properties_filter",
+    "apply_limit",
+    "get_nested_value",
+    "validate_filters",
+    "parse_filter_string",
+    # Filter Map
+    "FilterMap",
+    # Bulk
+    "BulkProcessor",
+    # Models
+    "CLIModel",
+    # Config
     "BaseConfig",
     "BrowserAutomation",
     "BrowserAutomationError",
-    "SessionData",
+    "CLIPage",
+    "PlaywrightCLIBrowser",
     "CredentialType",
     "mask_value",
     "combined_required_fields",

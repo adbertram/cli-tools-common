@@ -44,6 +44,7 @@ from .auth_commands import create_auth_app
 from .profiles_commands import create_profiles_app
 from .oauth import oauth_login, extract_code_from_input, generate_pkce_pair
 from .token_manager import TokenManager
+from .activity_log import get_activity_logger
 from .output import (
     print_json,
     print_table,
@@ -90,6 +91,8 @@ __all__ = [
     "extract_code_from_input",
     "generate_pkce_pair",
     "TokenManager",
+    # Activity Logging
+    "get_activity_logger",
     "print_json",
     "print_table",
     "print_output",

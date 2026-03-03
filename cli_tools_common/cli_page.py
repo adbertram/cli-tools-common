@@ -13,10 +13,30 @@ This module parses that JSON and extracts the ``result`` field.
 
 import base64
 import json
+import logging
+import os
 import re
 import subprocess
+import sys
 import time
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger("cli_tools.cli_page")
+
+
+def _setup_debug_logging():
+    """Configure debug logging to stderr when DEBUG=1 or CLI_TOOLS_DEBUG=1."""
+    if os.environ.get("DEBUG") == "1" or os.environ.get("CLI_TOOLS_DEBUG") == "1":
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter(
+            "[%(name)s] %(levelname)s: %(message)s"
+        ))
+        logger.setLevel(logging.DEBUG)
+        if not logger.handlers:
+            logger.addHandler(handler)
+
+
+_setup_debug_logging()
 
 
 class CLIPageError(Exception):
@@ -45,19 +65,29 @@ class CLIPage:
     def _run(self, args: list, timeout: int = 60, check: bool = True) -> subprocess.CompletedProcess:
         """Run a playwright CLI command with the named session."""
         cmd = ["playwright", "--session", self.session_name] + args
+        logger.debug("_run: cmd=%s timeout=%d check=%s", cmd, timeout, check)
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            logger.debug("_run: returncode=%d", result.returncode)
+            if result.stdout and result.stdout.strip():
+                logger.debug("_run: stdout=%s", result.stdout.strip()[:1000])
+            if result.stderr and result.stderr.strip():
+                logger.debug("_run: stderr=%s", result.stderr.strip()[:1000])
             if check and result.returncode != 0:
                 error_msg = result.stderr.strip() or result.stdout.strip() or "Command failed"
+                logger.debug("_run: check failed, raising CLIPageError: %s", error_msg)
                 raise CLIPageError(f"playwright error: {error_msg}")
             return result
         except subprocess.TimeoutExpired:
+            logger.debug("_run: TIMEOUT after %ds for cmd=%s", timeout, cmd)
             raise CLIPageError(f"Command timed out after {timeout}s")
         except FileNotFoundError:
+            logger.debug("_run: playwright CLI not found in PATH")
             raise CLIPageError("playwright CLI not found in PATH")
         except CLIPageError:
             raise
         except Exception as e:
+            logger.debug("_run: unexpected exception: %s", e)
             raise CLIPageError(f"Failed to run command: {e}")
 
     def _parse_eval_result(self, stdout: str) -> Any:

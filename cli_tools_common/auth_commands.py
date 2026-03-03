@@ -1,10 +1,30 @@
 """Standard auth Typer app: login, logout, status, refresh with --profile support."""
 
+import logging
+import os
+import sys
 import typer
 from typing import Callable, Optional
 
 from .credentials import CredentialType, mask_value, combined_login_prompts, combined_required_fields
 from .output import print_json, print_table, print_success, print_error, print_info, handle_error
+
+logger = logging.getLogger("cli_tools.auth_commands")
+
+
+def _setup_debug_logging():
+    """Configure debug logging to stderr when DEBUG=1 or CLI_TOOLS_DEBUG=1."""
+    if os.environ.get("DEBUG") == "1" or os.environ.get("CLI_TOOLS_DEBUG") == "1":
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter(
+            "[%(name)s] %(levelname)s: %(message)s"
+        ))
+        logger.setLevel(logging.DEBUG)
+        if not logger.handlers:
+            logger.addHandler(handler)
+
+
+_setup_debug_logging()
 
 
 def _prompt_extra_fields(config, force: bool):
@@ -22,15 +42,21 @@ def _prompt_extra_fields(config, force: bool):
 
 def _handle_browser_login(config, tool_name: str, force: bool):
     """Handle browser session login if config.get_browser() is configured."""
+    logger.debug("_handle_browser_login: tool=%s force=%s", tool_name, force)
     browser = config.get_browser()
     if browser is None:
+        logger.debug("_handle_browser_login: no browser configured, skipping")
         return
     try:
-        if not force and browser.is_authenticated():
+        is_auth = browser.is_authenticated()
+        logger.debug("_handle_browser_login: is_authenticated=%s", is_auth)
+        if not force and is_auth:
             print_success(f"Already authenticated ({tool_name} browser session)")
         else:
             print_info("Opening browser for login...")
+            logger.debug("_handle_browser_login: calling browser.login(force=%s)", force)
             result = browser.login(force=force)
+            logger.debug("_handle_browser_login: login result=%s", result)
             if result.get("success"):
                 print_success("Browser session authenticated")
             else:
@@ -41,12 +67,17 @@ def _handle_browser_login(config, tool_name: str, force: bool):
 
 def _check_browser_status(config) -> Optional[bool]:
     """Check browser session status. Returns None if no browser configured."""
+    logger.debug("_check_browser_status: checking browser session")
     browser = config.get_browser()
     if browser is None:
+        logger.debug("_check_browser_status: no browser configured")
         return None
     try:
-        return browser.is_authenticated()
-    except Exception:
+        result = browser.is_authenticated()
+        logger.debug("_check_browser_status: is_authenticated=%s", result)
+        return result
+    except Exception as e:
+        logger.debug("_check_browser_status: exception: %s", e)
         return False
     finally:
         try:
@@ -262,6 +293,8 @@ def create_auth_app(
         """Check authentication status."""
         try:
             config = get_config_fn(profile=profile)
+            logger.debug("auth_status: profile=%s has_credentials=%s",
+                         config.get_active_profile_name(), config.has_credentials())
 
             if config.has_credentials():
                 status_data = {
@@ -278,9 +311,11 @@ def create_auth_app(
 
                 # Auto-detect browser session status
                 browser_status = _check_browser_status(config)
+                logger.debug("auth_status: browser_status=%s", browser_status)
                 if browser_status is not None:
                     status_data["browser_session"] = browser_status
 
+                logger.debug("auth_status: final status_data=%s", status_data)
                 if table:
                     cols = list(status_data.keys())
                     hdrs = [c.replace("_", " ").title() for c in cols]
@@ -289,12 +324,18 @@ def create_auth_app(
                     print_json(status_data)
             else:
                 missing = config.get_missing_credentials()
+                logger.debug("auth_status: credentials missing: %s", missing)
+                # Still check browser session even when API creds are missing
+                browser_status = _check_browser_status(config)
+                logger.debug("auth_status: browser_status (no creds path)=%s", browser_status)
                 status_data = {
                     "authenticated": False,
                     "profile": config.get_active_profile_name(),
                     "missing": missing,
                     "message": f"Not authenticated. Run '{tool_name} auth login' to configure.",
                 }
+                if browser_status is not None:
+                    status_data["browser_session"] = browser_status
 
                 if table:
                     print_table(

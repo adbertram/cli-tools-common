@@ -1,0 +1,294 @@
+"""Filter validation and application module."""
+import re
+from typing import List, Set, Dict, Any, Tuple, Optional
+
+class FilterValidationError(Exception):
+    """Custom exception for filter validation errors."""
+    pass
+
+# Supported operators
+OPERATORS: Set[str] = {
+    'eq', 'ne', 'gt', 'gte', 'lt', 'lte',
+    'in', 'nin', 'like', 'ilike', 'null', 'notnull',
+    'contains', 'startswith', 'endswith'
+}
+
+# Operators that don't require a value
+NO_VALUE_OPERATORS: Set[str] = {'null', 'notnull'}
+
+def validate_filters(filter_strings: List[str]) -> List[str]:
+    """
+    Validates a list of filter strings.
+
+    Args:
+        filter_strings: List of filter strings from command line
+
+    Returns:
+        The validated filter strings
+
+    Raises:
+        FilterValidationError: If any filter string is invalid
+    """
+    if not filter_strings:
+        return []
+
+    for filter_string in filter_strings:
+        if not filter_string:
+            continue
+
+        # Split by comma for AND logic
+        parts = filter_string.split(',')
+
+        for part in parts:
+            _validate_part(part.strip())
+
+    return filter_strings
+
+def apply_filters(data: List[Dict], filter_strings: Optional[List[str]]) -> List[Dict]:
+    """
+    Apply filters to a list of dictionaries (client-side filtering).
+
+    Args:
+        data: List of dictionaries to filter
+        filter_strings: List of filter strings (field:op:value)
+
+    Returns:
+        Filtered list of dictionaries
+    """
+    if not filter_strings or not data:
+        return data
+
+    # Validate first (this might be redundant if caller already validated, but safe)
+    try:
+        validate_filters(filter_strings)
+    except FilterValidationError:
+        # If validation fails here, we assume the caller should have handled it or we propagate?
+        # For apply_filters, let's assume valid input or just proceed with best effort parsing
+        pass
+
+    filtered_data = []
+
+    parsed_filters = [parse_filter_string(fs) for fs in filter_strings]
+
+    for item in data:
+        # OR logic: item matches if it satisfies ANY of the parsed_filters groups
+        matches_any_group = False
+
+        for conditions in parsed_filters:
+            # AND logic: item must match ALL conditions in this group
+            matches_all_conditions = True
+            for field, op, val in conditions:
+                if not _matches_condition(item, field, op, val):
+                    matches_all_conditions = False
+                    break
+
+            if matches_all_conditions:
+                matches_any_group = True
+                break
+
+        if matches_any_group:
+            filtered_data.append(item)
+
+    return filtered_data
+
+def _validate_part(part: str):
+    """Validate a single filter part (field:op:value)."""
+    if not part:
+        raise FilterValidationError("Empty filter part")
+
+    tokens = part.split(':')
+
+    if len(tokens) < 2:
+        raise FilterValidationError(f"Invalid format '{part}'. Expected field:value or field:op:value")
+
+    field = tokens[0]
+    if not field:
+        raise FilterValidationError(f"Field cannot be empty in '{part}'")
+
+    # Check if second token is an operator
+    second_token = tokens[1]
+
+    if second_token in OPERATORS:
+        op = second_token
+        if op in NO_VALUE_OPERATORS:
+            if len(tokens) > 2:
+                 raise FilterValidationError(f"Operator '{op}' does not expect a value in '{part}'")
+        else:
+            if len(tokens) < 3:
+                 raise FilterValidationError(f"Operator '{op}' requires a value in '{part}'")
+
+            value = ":".join(tokens[2:])
+            if not value:
+                raise FilterValidationError(f"Value cannot be empty for operator '{op}' in '{part}'")
+    else:
+        value = ":".join(tokens[1:])
+        if not value:
+             raise FilterValidationError(f"Value cannot be empty in '{part}'")
+
+def parse_filter_string(filter_string: str) -> List[Tuple[str, str, Optional[str]]]:
+    """Parses a filter string into a list of (field, op, value) tuples (AND logic)."""
+    conditions = []
+    parts = filter_string.split(',')
+    for part in parts:
+        part = part.strip()
+        if not part: continue
+
+        tokens = part.split(':')
+        field = tokens[0]
+
+        if len(tokens) >= 2 and tokens[1] in OPERATORS:
+            op = tokens[1]
+            if op in NO_VALUE_OPERATORS:
+                val = None
+            else:
+                val = ":".join(tokens[2:])
+        else:
+            op = 'eq'
+            val = ":".join(tokens[1:])
+
+        conditions.append((field, op, val))
+    return conditions
+
+def _cast_value(value: str, target_type: type) -> Any:
+    """Attempts to cast string value to target type."""
+    try:
+        if target_type == bool:
+            return value.lower() in ('true', '1', 'yes', 'on')
+        if target_type == int:
+            return int(value)
+        if target_type == float:
+            return float(value)
+    except (ValueError, TypeError):
+        pass
+    return value
+
+def _matches_condition(item: Dict, field: str, op: str, value: Optional[str]) -> bool:
+    """Check if item matches the condition."""
+    item_val = get_nested_value(item, field)
+
+    if op == 'null':
+        return item_val is None
+    if op == 'notnull':
+        return item_val is not None
+
+    if item_val is None:
+        return False
+
+    # Cast filter value to match item value type for comparison
+    typed_filter_val = _cast_value(value, type(item_val))
+
+    if op == 'eq':
+        return item_val == typed_filter_val
+    if op == 'ne':
+        return item_val != typed_filter_val
+
+    # Comparison operators
+    try:
+        if op == 'gt':
+            return item_val > typed_filter_val
+        if op == 'gte':
+            return item_val >= typed_filter_val
+        if op == 'lt':
+            return item_val < typed_filter_val
+        if op == 'lte':
+            return item_val <= typed_filter_val
+    except TypeError:
+        # Fallback to string comparison if types don't support ordering
+        return str(item_val) > str(typed_filter_val) if op == 'gt' else False # simplify
+
+    if op == 'in':
+        options = value.split('|')
+        typed_options = [_cast_value(opt, type(item_val)) for opt in options]
+        return item_val in typed_options
+
+    if op == 'nin':
+        options = value.split('|')
+        typed_options = [_cast_value(opt, type(item_val)) for opt in options]
+        return item_val not in typed_options
+
+    if op == 'like':
+        pattern = re.escape(value).replace('%', '.*')
+        return bool(re.search(f"^{pattern}$", str(item_val)))
+
+    if op == 'ilike':
+        pattern = re.escape(value).replace('%', '.*')
+        return bool(re.search(f"^{pattern}$", str(item_val), re.IGNORECASE))
+
+    if op == 'contains':
+        return value.lower() in str(item_val).lower()
+
+    if op == 'startswith':
+        return str(item_val).lower().startswith(value.lower())
+
+    if op == 'endswith':
+        return str(item_val).lower().endswith(value.lower())
+
+    return False
+
+
+def get_nested_value(obj: Dict, path: str) -> Any:
+    """
+    Get value from nested dict using dot notation.
+
+    Args:
+        obj: Dictionary to extract value from
+        path: Dot-separated path (e.g., 'fields.Name' or 'metadata.created_at')
+
+    Returns:
+        The value at the path, or None if not found
+    """
+    keys = path.split(".")
+    value = obj
+    for key in keys:
+        if isinstance(value, dict) and key in value:
+            value = value[key]
+        else:
+            return None
+    return value
+
+
+def apply_properties_filter(data: List[Dict], properties: Optional[str]) -> List[Dict]:
+    """
+    Filter dictionary keys to only include specified properties.
+
+    Args:
+        data: List of dictionaries to filter
+        properties: Comma-separated list of property names (supports dot notation)
+
+    Returns:
+        List of dictionaries with only the specified properties
+    """
+    if not properties or not data:
+        return data
+
+    prop_list = [p.strip() for p in properties.split(",") if p.strip()]
+    if not prop_list:
+        return data
+
+    filtered_data = []
+    for item in data:
+        filtered_item = {}
+        for prop in prop_list:
+            value = get_nested_value(item, prop)
+            if value is not None:
+                # Store with the original property path as key
+                filtered_item[prop] = value
+        filtered_data.append(filtered_item)
+
+    return filtered_data
+
+
+def apply_limit(data: List[Any], limit: Optional[int]) -> List[Any]:
+    """
+    Apply limit to a list of items.
+
+    Args:
+        data: List to limit
+        limit: Maximum number of items to return
+
+    Returns:
+        Sliced list if limit is specified, otherwise original list
+    """
+    if limit is not None and limit > 0:
+        return data[:limit]
+    return data

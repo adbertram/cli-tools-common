@@ -89,27 +89,35 @@ class BrowserAutomation:
     # ==================== Public Interface ====================
 
     def is_authenticated(self) -> bool:
-        marker = self._marker_path()
-        exists = marker.exists()
-        logger.debug("is_authenticated: marker=%s exists=%s", marker, exists)
-        if exists:
-            try:
-                content = marker.read_text()
-                logger.debug("is_authenticated: marker content=%s", content[:500])
-            except Exception as e:
-                logger.debug("is_authenticated: could not read marker: %s", e)
-        # Log profile directory contents
+        """Check if authenticated via marker file and optional browser verification.
+
+        Verification priority (first configured wins):
+        1. AUTH_COOKIE_PATTERNS — checks browser cookies match patterns
+        2. AUTH_SUCCESS_SELECTOR — checks DOM element visible on AUTH_CHECK_URL
+
+        If neither is configured, marker file existence is sufficient.
+        """
+        if not self.has_session():
+            logger.debug("is_authenticated: no session marker")
+            return False
+
+        # If no browser verification hooks, marker is sufficient
+        if not self.AUTH_COOKIE_PATTERNS and not self.AUTH_SUCCESS_SELECTOR:
+            logger.debug("is_authenticated: marker exists, no verification hooks configured")
+            return True
+
+        # Browser-based verification
+        logger.debug("is_authenticated: verifying via browser (cookies=%s, selector=%s)",
+                     bool(self.AUTH_COOKIE_PATTERNS), bool(self.AUTH_SUCCESS_SELECTOR))
         try:
-            data_dir = self._get_browser_data_dir()
-            if data_dir.exists():
-                files = list(data_dir.iterdir())
-                logger.debug("is_authenticated: browser data dir=%s files=%s",
-                             data_dir, [f.name for f in files])
-            else:
-                logger.debug("is_authenticated: browser data dir=%s does not exist", data_dir)
+            page = self.get_page(self.AUTH_CHECK_URL)
+            page.wait_for_timeout(2000)
+            result = self._is_authenticated_page(page)
+            logger.debug("is_authenticated: browser verification result=%s", result)
+            return result
         except Exception as e:
-            logger.debug("is_authenticated: could not list browser data dir: %s", e)
-        return exists
+            logger.debug("is_authenticated: browser verification failed: %s", e)
+            return False
 
     def authenticate(self, force: bool = False):
         """Interactive login via headed persistent browser.
@@ -144,7 +152,7 @@ class BrowserAutomation:
             raise BrowserAutomationError(f"Failed to open browser: {e}") from e
         logger.debug("authenticate: browser open succeeded")
 
-        # Poll page URL until login is detected
+        # Poll until login is detected — checks both URL change and success selector
         page = PlaywrightService(self._session_name())
         deadline = time.time() + self.LOGIN_TIMEOUT
         poll_count = 0
@@ -153,10 +161,14 @@ class BrowserAutomation:
             poll_count += 1
             try:
                 is_login = self._is_login_page(page)
-                logger.debug("authenticate: poll #%d url=%r is_login_page=%s",
-                             poll_count, page.url, is_login)
+                is_authed = self._is_authenticated_page(page) if is_login else False
+                logger.debug("authenticate: poll #%d url=%r is_login_page=%s is_authenticated_page=%s",
+                             poll_count, page.url, is_login, is_authed)
                 if not is_login:
                     logger.debug("authenticate: login detected (no longer on login page)")
+                    break
+                if is_authed:
+                    logger.debug("authenticate: login detected (auth selector/cookie found while still on login URL)")
                     break
             except Exception as e:
                 # Browser may have been closed by user — check if session is gone
@@ -173,9 +185,11 @@ class BrowserAutomation:
         logger.debug("authenticate: waiting 2s for cookies to persist")
         time.sleep(2)
 
-        # Close the headed browser
+        # Close the headed browser and clear session metadata so the next
+        # browser_open defaults to headless (the .session file remembers headed=true)
         logger.debug("authenticate: closing headed browser")
         self.close()
+        svc.clear_session_metadata()
 
         # Write marker
         marker = self._marker_path()
@@ -187,20 +201,23 @@ class BrowserAutomation:
         marker.write_text(marker_data)
         logger.debug("authenticate: wrote marker file %s: %s", marker, marker_data)
 
-        # Post-auth hook — open headless page so subclass can extract tokens etc.
-        logger.debug("authenticate: running post-auth hook (_on_authenticated) with AUTH_CHECK_URL=%s",
-                     self.AUTH_CHECK_URL)
-        try:
-            page = self.get_page(self.AUTH_CHECK_URL)
-            page.wait_for_timeout(2000)
-            current_url = page.url
-            logger.debug("authenticate: post-auth page url=%s", current_url)
-            self._on_authenticated(page)
-            logger.debug("authenticate: _on_authenticated completed successfully")
-        except Exception as e:
-            logger.debug("authenticate: post-auth hook exception (swallowed): %s", e)
-        finally:
-            self.close()
+        # Post-auth hook — only open headless page if subclass overrides _on_authenticated
+        if type(self)._on_authenticated is not BrowserAutomation._on_authenticated:
+            logger.debug("authenticate: running post-auth hook (_on_authenticated) with AUTH_CHECK_URL=%s",
+                         self.AUTH_CHECK_URL)
+            try:
+                page = self.get_page(self.AUTH_CHECK_URL)
+                page.wait_for_timeout(2000)
+                current_url = page.url
+                logger.debug("authenticate: post-auth page url=%s", current_url)
+                self._on_authenticated(page)
+                logger.debug("authenticate: _on_authenticated completed successfully")
+            except Exception as e:
+                logger.debug("authenticate: post-auth hook exception (swallowed): %s", e)
+            finally:
+                self.close()
+        else:
+            logger.debug("authenticate: no _on_authenticated override, skipping post-auth browser")
 
         logger.debug("authenticate: complete")
         print_success("Authentication complete.")
@@ -325,7 +342,31 @@ class BrowserAutomation:
         return False
 
     def _is_authenticated_page(self, page) -> bool:
+        """Check if page indicates authenticated state.
+
+        Checks in priority order (first configured wins):
+        1. AUTH_COOKIE_PATTERNS — auth cookies present in browser
+        2. AUTH_SUCCESS_SELECTOR — DOM element visible on page
+        3. AUTH_SUCCESS_URL — URL matches success pattern
+        4. Fallback — current URL is not a login page
+        """
         url = page.url
+
+        # 1. Cookie check
+        if self.AUTH_COOKIE_PATTERNS:
+            try:
+                cookies = page.cookie_list()
+                auth_cookies = self._get_auth_cookies(cookies)
+                has_cookies = len(auth_cookies) > 0
+                logger.debug("_is_authenticated_page: cookie check — %d auth cookies "
+                             "(patterns=%s, total_cookies=%d)",
+                             len(auth_cookies), self.AUTH_COOKIE_PATTERNS, len(cookies))
+                return has_cookies
+            except Exception as e:
+                logger.debug("_is_authenticated_page: cookie check failed: %s", e)
+                return False
+
+        # 2. DOM element check
         if self.AUTH_SUCCESS_SELECTOR:
             try:
                 visible = page.locator(self.AUTH_SUCCESS_SELECTOR).first.is_visible(timeout=500)
@@ -335,11 +376,15 @@ class BrowserAutomation:
             except Exception as e:
                 logger.debug("_is_authenticated_page: selector check failed: %s", e)
                 return False
+
+        # 3. Success URL pattern
         if self.AUTH_SUCCESS_URL:
             result = bool(re.search(self.AUTH_SUCCESS_URL, url))
             logger.debug("_is_authenticated_page: url=%s success_url_pattern=%r match=%s",
                          url, self.AUTH_SUCCESS_URL, result)
             return result
+
+        # 4. Fallback: not on login page
         result = not self._is_login_page(page)
         logger.debug("_is_authenticated_page: fallback (not login page) = %s", result)
         return result

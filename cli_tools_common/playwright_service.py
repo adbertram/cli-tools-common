@@ -371,10 +371,39 @@ def _parse_console_messages(output: str) -> List[Dict[str, Any]]:
 
 
 def _parse_eval_result(stdout: str) -> Any:
-    """Extract the result field from playwright page eval JSON output."""
+    """Extract the result field from playwright page eval JSON output.
+
+    Handles two output formats:
+    1. Raw JSON: ``{"result": ...}``
+    2. Markdown: ``### Result\\n<json>\\n### Ran Playwright code ...``
+    """
     text = stdout.strip()
     if not text:
         return None
+
+    # Handle markdown-formatted output (### Result ... ### Ran Playwright code)
+    if text.startswith("### Result"):
+        lines = text.split("\n")
+        json_lines = []
+        capturing = False
+        for line in lines:
+            if line.startswith("### Result"):
+                capturing = True
+                continue
+            if line.startswith("### ") and capturing:
+                break
+            if capturing:
+                json_lines.append(line)
+        json_text = "\n".join(json_lines).strip()
+        if json_text:
+            if json_text in ("undefined", "null"):
+                return None
+            try:
+                return json.loads(json_text)
+            except (json.JSONDecodeError, ValueError):
+                return json_text
+        return None
+
     try:
         data = json.loads(text)
     except (json.JSONDecodeError, ValueError):
@@ -520,6 +549,23 @@ class PlaywrightService:
             except OSError:
                 pass
 
+    def clear_session_metadata(self) -> None:
+        """Delete the .session file so the next browser_open uses fresh flags.
+
+        The .session file stores launch settings (headed, persistent, etc.).
+        Deleting it ensures the next browser_open respects the flags passed to
+        it rather than reusing stale settings (e.g. headed=true from a prior
+        authenticate() call).  The user data directory (cookies, localStorage)
+        is NOT deleted.
+        """
+        profiles_dir = Path.home() / "Library" / "Caches" / "ms-playwright" / "daemon"
+        for sf in profiles_dir.glob(f"*/{self.session}.session"):
+            try:
+                sf.unlink()
+                logger.debug("clear_session_metadata: deleted %s", sf)
+            except OSError:
+                pass
+
     def _page_info_cmd(self, args: list, **kwargs) -> Dict[str, Any]:
         """Run command and return page info dict."""
         result = self._run(args, **kwargs)
@@ -556,7 +602,20 @@ class PlaywrightService:
             args.append("--headed")
         if url:
             args.append(url)
-        return self._page_info_cmd(args)
+        try:
+            return self._page_info_cmd(args)
+        except PlaywrightServiceError as e:
+            if "already in use" not in str(e).lower():
+                raise
+            # Stale browser holding the lock — close it and retry once.
+            logger.debug("browser_open: stale browser in use, closing and retrying")
+            try:
+                self.browser_close()
+            except PlaywrightServiceError:
+                pass
+            self.clear_session_metadata()
+            self._clear_stale_lock()
+            return self._page_info_cmd(args)
 
     def browser_close(self) -> Dict[str, Any]:
         return self._success_cmd(["close"], "Browser closed")

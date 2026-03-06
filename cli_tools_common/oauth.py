@@ -78,6 +78,10 @@ def extract_code_from_input(user_input: str) -> str:
 def _capture_code_playwright(auth_url: str, redirect_uri: str, timeout: int) -> str:
     """Open Playwright browser and capture the redirect with auth code.
 
+    Uses PlaywrightService (headed, non-persistent) to open a browser,
+    navigate to the auth URL, and poll for the redirect containing the
+    authorization code.
+
     Args:
         auth_url: The full authorization URL to navigate to.
         redirect_uri: The redirect URI to watch for.
@@ -86,54 +90,45 @@ def _capture_code_playwright(auth_url: str, redirect_uri: str, timeout: int) -> 
     Returns:
         The authorization code extracted from the redirect URL.
     """
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        raise RuntimeError(
-            "Playwright is required for browser-based code capture. "
-            "Install with: pip install playwright && playwright install chromium"
-        )
+    import time
+    from .browser import PlaywrightService, PlaywrightServiceError
 
     redirect_host = urlparse(redirect_uri).netloc
+    session_name = f"oauth-{secrets.token_hex(4)}"
 
-    captured_url = None
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
-        page = browser.new_page()
-
-        def on_response(response):
-            nonlocal captured_url
-            url = response.url
-            if urlparse(url).netloc == redirect_host and "code=" in url:
-                captured_url = url
-
-        page.on("response", on_response)
-
-        page.goto(auth_url)
-
+    svc = PlaywrightService(session_name, timeout=timeout)
+    try:
+        svc.browser_open(url=auth_url, headed=True)
         print_info("Waiting for authorization in browser...")
 
-        # Wait for redirect
+        poll_interval = 0.5
+        elapsed = 0.0
+        while elapsed < timeout:
+            try:
+                current_url = svc.url
+            except PlaywrightServiceError:
+                current_url = ""
+            if current_url and redirect_host in current_url and "code=" in current_url:
+                return extract_code_from_input(current_url)
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+
+        # Final check
         try:
-            page.wait_for_url(f"**{redirect_host}**", timeout=timeout * 1000)
-            if captured_url is None:
-                captured_url = page.url
-        except Exception:
-            if captured_url is None:
-                # Try the current URL as a last resort
-                current = page.url
-                if redirect_host in current and "code=" in current:
-                    captured_url = current
+            current_url = svc.url
+        except PlaywrightServiceError:
+            current_url = ""
+        if current_url and redirect_host in current_url and "code=" in current_url:
+            return extract_code_from_input(current_url)
 
-        browser.close()
-
-    if not captured_url:
         raise ValueError(
             f"Timed out waiting for redirect to {redirect_host} after {timeout}s"
         )
-
-    return extract_code_from_input(captured_url)
+    finally:
+        try:
+            svc.browser_close()
+        except PlaywrightServiceError:
+            pass
 
 
 def build_token_auth_headers(config) -> tuple:

@@ -1,6 +1,79 @@
 """Credential type definitions, validation, and masking."""
 
+from dataclasses import dataclass, field
 from enum import Enum
+
+
+@dataclass(frozen=True)
+class _CredentialConfig:
+    """All properties for a single credential type, defined in one place."""
+
+    required_fields: tuple = ()
+    all_fields: tuple = ()
+    login_prompts: tuple = ()       # (field_name, prompt_text, hide_input) tuples
+    ephemeral_fields: tuple = ()
+    sensitive_fields: tuple = ()
+
+
+# Single source of truth: each credential type's full definition lives here.
+# Adding a new type = one entry. No other locations to update.
+_CONFIGS = {
+    "api_key": _CredentialConfig(
+        required_fields=("API_KEY",),
+        all_fields=("API_KEY", "BASE_URL"),
+        login_prompts=(("API_KEY", "API key", True),),
+        sensitive_fields=("API_KEY",),
+    ),
+    "personal_access_token": _CredentialConfig(
+        required_fields=("PERSONAL_ACCESS_TOKEN",),
+        all_fields=("PERSONAL_ACCESS_TOKEN", "BASE_URL"),
+        login_prompts=(("PERSONAL_ACCESS_TOKEN", "Personal access token", True),),
+        sensitive_fields=("PERSONAL_ACCESS_TOKEN",),
+    ),
+    "oauth": _CredentialConfig(
+        required_fields=("CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN"),
+        all_fields=(
+            "CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN",
+            "REFRESH_TOKEN", "TOKEN_EXPIRES_AT", "BASE_URL",
+        ),
+        login_prompts=(
+            ("CLIENT_ID", "Client ID", False),
+            ("CLIENT_SECRET", "Client secret", True),
+        ),
+        ephemeral_fields=("ACCESS_TOKEN", "REFRESH_TOKEN", "TOKEN_EXPIRES_AT"),
+        sensitive_fields=("CLIENT_SECRET", "ACCESS_TOKEN", "REFRESH_TOKEN"),
+    ),
+    "oauth_authorization_code": _CredentialConfig(
+        required_fields=("CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN"),
+        all_fields=(
+            "CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN",
+            "REFRESH_TOKEN", "TOKEN_EXPIRES_AT", "REDIRECT_URI", "BASE_URL",
+        ),
+        login_prompts=(
+            ("CLIENT_ID", "Client ID", False),
+            ("CLIENT_SECRET", "Client secret", True),
+            ("REDIRECT_URI", "Redirect URI", False),
+        ),
+        ephemeral_fields=("ACCESS_TOKEN", "REFRESH_TOKEN", "TOKEN_EXPIRES_AT"),
+        sensitive_fields=("CLIENT_SECRET", "ACCESS_TOKEN", "REFRESH_TOKEN"),
+    ),
+    "username_password": _CredentialConfig(
+        required_fields=("USERNAME", "PASSWORD"),
+        all_fields=("USERNAME", "PASSWORD", "BASE_URL"),
+        login_prompts=(
+            ("USERNAME", "Username", False),
+            ("PASSWORD", "Password", True),
+        ),
+        sensitive_fields=("PASSWORD",),
+    ),
+    "browser_session": _CredentialConfig(
+        all_fields=("BASE_URL",),
+    ),
+    "custom": _CredentialConfig(),
+    "no_auth": _CredentialConfig(),
+}
+
+_EMPTY = _CredentialConfig()
 
 
 class CredentialType(Enum):
@@ -13,38 +86,21 @@ class CredentialType(Enum):
     USERNAME_PASSWORD = "username_password"
     BROWSER_SESSION = "browser_session"
     CUSTOM = "custom"
+    NO_AUTH = "no_auth"
+
+    @property
+    def _config(self) -> _CredentialConfig:
+        return _CONFIGS.get(self.value, _EMPTY)
 
     @property
     def required_fields(self) -> list:
         """Fields that must be set for credentials to be valid."""
-        return {
-            CredentialType.API_KEY: ["API_KEY"],
-            CredentialType.PERSONAL_ACCESS_TOKEN: ["PERSONAL_ACCESS_TOKEN"],
-            CredentialType.OAUTH: ["CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN"],
-            CredentialType.OAUTH_AUTHORIZATION_CODE: ["CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN"],
-            CredentialType.USERNAME_PASSWORD: ["USERNAME", "PASSWORD"],
-            CredentialType.BROWSER_SESSION: [],
-            CredentialType.CUSTOM: [],
-        }[self]
+        return list(self._config.required_fields)
 
     @property
     def all_fields(self) -> list:
         """All fields associated with this credential type (for clearing)."""
-        return {
-            CredentialType.API_KEY: ["API_KEY", "BASE_URL"],
-            CredentialType.PERSONAL_ACCESS_TOKEN: ["PERSONAL_ACCESS_TOKEN", "BASE_URL"],
-            CredentialType.OAUTH: [
-                "CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN",
-                "REFRESH_TOKEN", "TOKEN_EXPIRES_AT", "BASE_URL",
-            ],
-            CredentialType.OAUTH_AUTHORIZATION_CODE: [
-                "CLIENT_ID", "CLIENT_SECRET", "ACCESS_TOKEN",
-                "REFRESH_TOKEN", "TOKEN_EXPIRES_AT", "REDIRECT_URI", "BASE_URL",
-            ],
-            CredentialType.USERNAME_PASSWORD: ["USERNAME", "PASSWORD", "BASE_URL"],
-            CredentialType.BROWSER_SESSION: ["BASE_URL"],
-            CredentialType.CUSTOM: [],
-        }[self]
+        return list(self._config.all_fields)
 
     @property
     def login_prompts(self) -> list:
@@ -53,29 +109,7 @@ class CredentialType(Enum):
         For OAUTH_AUTHORIZATION_CODE, these are the setup prompts for app credentials.
         The actual token acquisition happens via a login_handler callback (browser flow).
         """
-        return {
-            CredentialType.API_KEY: [
-                ("API_KEY", "API key", True),
-            ],
-            CredentialType.PERSONAL_ACCESS_TOKEN: [
-                ("PERSONAL_ACCESS_TOKEN", "Personal access token", True),
-            ],
-            CredentialType.OAUTH: [
-                ("CLIENT_ID", "Client ID", False),
-                ("CLIENT_SECRET", "Client secret", True),
-            ],
-            CredentialType.OAUTH_AUTHORIZATION_CODE: [
-                ("CLIENT_ID", "Client ID", False),
-                ("CLIENT_SECRET", "Client secret", True),
-                ("REDIRECT_URI", "Redirect URI", False),
-            ],
-            CredentialType.USERNAME_PASSWORD: [
-                ("USERNAME", "Username", False),
-                ("PASSWORD", "Password", True),
-            ],
-            CredentialType.BROWSER_SESSION: [],
-            CredentialType.CUSTOM: [],
-        }[self]
+        return list(self._config.login_prompts)
 
     @property
     def ephemeral_fields(self) -> list:
@@ -84,28 +118,12 @@ class CredentialType(Enum):
         Static credentials (API keys, PATs, client IDs, passwords) are never
         cleared by --force since they don't expire or change.
         """
-        return {
-            CredentialType.API_KEY: [],
-            CredentialType.PERSONAL_ACCESS_TOKEN: [],
-            CredentialType.OAUTH: ["ACCESS_TOKEN", "REFRESH_TOKEN", "TOKEN_EXPIRES_AT"],
-            CredentialType.OAUTH_AUTHORIZATION_CODE: ["ACCESS_TOKEN", "REFRESH_TOKEN", "TOKEN_EXPIRES_AT"],
-            CredentialType.USERNAME_PASSWORD: [],
-            CredentialType.BROWSER_SESSION: [],
-            CredentialType.CUSTOM: [],
-        }[self]
+        return list(self._config.ephemeral_fields)
 
     @property
     def sensitive_fields(self) -> list:
         """Fields that should be masked in status output."""
-        return {
-            CredentialType.API_KEY: ["API_KEY"],
-            CredentialType.PERSONAL_ACCESS_TOKEN: ["PERSONAL_ACCESS_TOKEN"],
-            CredentialType.OAUTH: ["CLIENT_SECRET", "ACCESS_TOKEN", "REFRESH_TOKEN"],
-            CredentialType.OAUTH_AUTHORIZATION_CODE: ["CLIENT_SECRET", "ACCESS_TOKEN", "REFRESH_TOKEN"],
-            CredentialType.USERNAME_PASSWORD: ["PASSWORD"],
-            CredentialType.BROWSER_SESSION: [],
-            CredentialType.CUSTOM: [],
-        }[self]
+        return list(self._config.sensitive_fields)
 
 
 def mask_value(value: str) -> str:

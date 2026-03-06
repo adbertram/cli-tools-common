@@ -5,6 +5,7 @@ import typer
 from typing import Callable, Optional
 
 from ._debug_logging import configure_debug_logger
+from .auth_verifier import AuthVerifier
 from .credentials import CredentialType, mask_value, combined_login_prompts, combined_required_fields
 from .output import print_json, print_table, print_success, print_error, print_info, handle_error
 
@@ -60,27 +61,6 @@ def _handle_browser_login(config, tool_name: str, force: bool):
                 print_error(f"Browser auth failed: {result.get('message', 'Unknown error')}")
     finally:
         browser.close()
-
-
-def _check_browser_status(config) -> Optional[bool]:
-    """Check browser session status. Returns None if no browser configured."""
-    logger.debug("_check_browser_status: checking browser session")
-    browser = config.get_browser()
-    if browser is None:
-        logger.debug("_check_browser_status: no browser configured")
-        return None
-    try:
-        result = browser.is_authenticated()
-        logger.debug("_check_browser_status: is_authenticated=%s", result)
-        return result
-    except Exception as e:
-        logger.debug("_check_browser_status: exception: %s", e)
-        return False
-    finally:
-        try:
-            browser.close()
-        except Exception:
-            pass
 
 
 def _resolve_credential_type(config, credential_type_str: str):
@@ -214,10 +194,22 @@ def create_auth_app(
             None, "--profile", "-p", help="Profile name to clear credentials from"
         ),
     ):
-        """Clear stored credentials."""
+        """Clear stored credentials and browser sessions."""
         try:
             config = get_config_fn(profile=profile)
             config.clear_credentials()
+            # Also clear browser session (Playwright daemon + session data)
+            browser = config.get_browser()
+            if browser is not None:
+                try:
+                    browser.clear_session()
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
             print_success("Credentials cleared")
         except Exception as e:
             raise typer.Exit(handle_error(e))
@@ -237,55 +229,40 @@ def create_auth_app(
             logger.debug("auth_status: profile=%s has_credentials=%s",
                          config.get_active_profile_name(), config.has_credentials())
 
-            if config.has_credentials():
-                status_data = {
-                    "authenticated": True,
-                    "profile": config.get_active_profile_name(),
-                    "base_url": config.base_url,
-                }
+            # Live verification
+            verifier = AuthVerifier(config)
+            auth_result = verifier.verify()
 
-                # Add masked credential fields
+            status_data = {
+                "authenticated": auth_result["authenticated"],
+                "credentials_saved": auth_result["credentials_saved"],
+                "profile": config.get_active_profile_name(),
+                "base_url": config.base_url,
+            }
+
+            # Masked credential fields (only if creds exist)
+            if auth_result["credentials_saved"]:
                 for field in combined_required_fields(config._resolved_credential_types, config=config):
                     value = config._get(field)
                     if value:
                         status_data[field.lower()] = mask_value(value)
 
-                # Auto-detect browser session status
-                browser_status = _check_browser_status(config)
-                logger.debug("auth_status: browser_status=%s", browser_status)
-                if browser_status is not None:
-                    status_data["browser_session"] = browser_status
+            # Conditional fields from verification
+            for key in ("oauth_status", "api_test", "browser_session"):
+                if key in auth_result:
+                    status_data[key] = auth_result[key]
 
-                logger.debug("auth_status: final status_data=%s", status_data)
-                if table:
-                    cols = list(status_data.keys())
-                    hdrs = [c.replace("_", " ").title() for c in cols]
-                    print_table([status_data], cols, hdrs)
-                else:
-                    print_json(status_data)
+            if not auth_result["credentials_saved"]:
+                status_data["missing"] = config.get_missing_credentials()
+                status_data["message"] = f"Not authenticated. Run '{tool_name} auth login' to configure."
+
+            logger.debug("auth_status: final status_data=%s", status_data)
+            if table:
+                cols = list(status_data.keys())
+                hdrs = [c.replace("_", " ").title() for c in cols]
+                print_table([status_data], cols, hdrs)
             else:
-                missing = config.get_missing_credentials()
-                logger.debug("auth_status: credentials missing: %s", missing)
-                # Still check browser session even when API creds are missing
-                browser_status = _check_browser_status(config)
-                logger.debug("auth_status: browser_status (no creds path)=%s", browser_status)
-                status_data = {
-                    "authenticated": False,
-                    "profile": config.get_active_profile_name(),
-                    "missing": missing,
-                    "message": f"Not authenticated. Run '{tool_name} auth login' to configure.",
-                }
-                if browser_status is not None:
-                    status_data["browser_session"] = browser_status
-
-                if table:
-                    print_table(
-                        [status_data],
-                        ["authenticated", "profile", "message"],
-                        ["Authenticated", "Profile", "Message"],
-                    )
-                else:
-                    print_json(status_data)
+                print_json(status_data)
 
         except typer.Exit:
             raise
@@ -347,26 +324,8 @@ def create_auth_app(
             try:
                 config = get_config_fn(profile=profile)
 
-                # 1. Check credentials exist (automatic)
-                result = {"credentials_configured": config.has_credentials()}
-
-                # 2. API test via CLI-provided callback
-                if result["credentials_configured"]:
-                    try:
-                        api_result = effective_test_handler(config)
-                        result.update(api_result)
-                    except Exception as e:
-                        result["api_test"] = f"failed: {e}"
-
-                # 3. Browser session check (automatic if get_browser configured)
-                browser_status = _check_browser_status(config)
-                if browser_status is not None:
-                    result["browser_session"] = browser_status
-
-                # 4. Overall authenticated status
-                api_ok = result.get("api_test") == "passed"
-                browser_ok = result.get("browser_session", True)  # True if no browser configured
-                result["authenticated"] = api_ok and browser_ok
+                verifier = AuthVerifier(config, api_test_handler=effective_test_handler)
+                result = verifier.verify()
 
                 if verbose:
                     result["profile"] = config.get_active_profile_name()

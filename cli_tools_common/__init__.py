@@ -5,11 +5,12 @@ from .config import BaseConfig
 
 def __getattr__(name):
     """Lazy-load browser modules."""
-    if name in ("BrowserAutomation", "BrowserAutomationError"):
-        from .browser_automation import BrowserAutomation, BrowserAutomationError
+    if name in ("BrowserAutomation", "BrowserAutomationError", "AuthResult"):
+        from .browser_automation import BrowserAutomation, BrowserAutomationError, AuthResult
         _browser_exports = {
             "BrowserAutomation": BrowserAutomation,
             "BrowserAutomationError": BrowserAutomationError,
+            "AuthResult": AuthResult,
         }
         return _browser_exports[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -36,6 +37,7 @@ from .credentials import (
 from .exceptions import ClientError, ConfigError
 from .auth_commands import create_auth_app
 from .profiles_commands import create_profiles_app
+from .command_registry import register_commands
 from .oauth import oauth_login, extract_code_from_input, generate_pkce_pair, build_token_auth_headers, parse_and_save_tokens
 from .token_manager import TokenManager
 from .activity_log import get_activity_logger
@@ -67,6 +69,7 @@ __all__ = [
     "CLIModel",
     # Config
     "BaseConfig",
+    "AuthResult",
     "BrowserAutomation",
     "BrowserAutomationError",
     "CredentialType",
@@ -79,6 +82,7 @@ __all__ = [
     "ConfigError",
     "create_auth_app",
     "create_profiles_app",
+    "register_commands",
     "oauth_login",
     "extract_code_from_input",
     "generate_pkce_pair",

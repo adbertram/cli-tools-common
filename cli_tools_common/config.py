@@ -298,13 +298,22 @@ class BaseConfig:
     # ==================== Credential Management ====================
 
     def has_credentials(self) -> bool:
-        """Check if required credentials are set."""
+        """Check if required credentials are set.
+
+        For dual-auth tools (e.g. OAUTH + BROWSER_SESSION), uses OR logic:
+        the tool has credentials if non-browser creds are complete OR a saved
+        browser session exists.  Single-type tools use simple all-fields check.
+        """
         cred_types = self._resolved_credential_types
         if CredentialType.BROWSER_SESSION in cred_types:
-            # Browser session: require saved session profile + any non-browser credential fields
             non_browser_types = [ct for ct in cred_types if ct != CredentialType.BROWSER_SESSION]
             non_browser_ok = all(self._get(f) for f in combined_required_fields(non_browser_types, config=self))
-            return non_browser_ok and self.has_saved_session()
+            browser_ok = self.has_saved_session()
+            if non_browser_types:
+                # Dual-auth: either pathway is sufficient
+                return non_browser_ok or browser_ok
+            # Browser-only: just check session
+            return browser_ok
         return all(self._get(f) for f in combined_required_fields(cred_types, config=self))
 
     def get_missing_credentials(self) -> list:

@@ -201,14 +201,29 @@ class PlaywrightService:
                 "_kill_orphaned_browsers: killing %d processes for %s: %s",
                 len(pids), user_data_dir, pids,
             )
+            # SIGTERM first
             subprocess.run(
                 ["kill"] + pids,
                 capture_output=True,
                 timeout=5,
             )
-            # Brief pause to let processes terminate
             import time as _time
-            _time.sleep(0.5)
+            _time.sleep(1)
+            # SIGKILL any survivors
+            result2 = subprocess.run(
+                ["pgrep", "-f", user_data_dir],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result2.returncode == 0 and result2.stdout.strip():
+                survivors = [p.strip() for p in result2.stdout.strip().split("\n") if p.strip()]
+                if survivors:
+                    logger.info("_kill_orphaned_browsers: SIGKILL %d survivors", len(survivors))
+                    subprocess.run(
+                        ["kill", "-9"] + survivors,
+                        capture_output=True,
+                        timeout=5,
+                    )
+                    _time.sleep(0.5)
             return len(pids)
         except Exception as exc:
             logger.debug("_kill_orphaned_browsers: failed: %s", exc)
@@ -229,6 +244,33 @@ class PlaywrightService:
                 logger.debug("clear_session_metadata: deleted %s", sf)
             except OSError:
                 pass
+
+    def _clear_stale_socket(self) -> bool:
+        """Remove stale Unix domain socket files for this session.
+
+        playwright-cli creates socket files at $TMPDIR/playwright-cli/<hash>/<session>.sock
+        for IPC. These can become stale when browser processes are killed without
+        clean shutdown, causing EADDRINUSE on the next open.
+
+        Returns True if a socket file was removed.
+        """
+        import os
+        import tempfile
+        tmpdir = Path(tempfile.gettempdir())
+        pw_dir = tmpdir / "playwright-cli"
+        if not pw_dir.exists():
+            return False
+        cleared = False
+        # Socket extension may be truncated (e.g. .soc instead of .sock)
+        # due to macOS ~104 byte Unix domain socket path limit
+        for sock in pw_dir.glob(f"*/{self.session}.soc*"):
+            try:
+                sock.unlink()
+                cleared = True
+                logger.info("_clear_stale_socket: removed %s", sock)
+            except OSError as exc:
+                logger.debug("_clear_stale_socket: failed to remove %s: %s", sock, exc)
+        return cleared
 
     def _page_info_cmd(self, args: list, **kwargs) -> Dict[str, Any]:
         """Run command and return page info dict."""
@@ -255,8 +297,10 @@ class PlaywrightService:
         persistent: bool = False,
         profile: Optional[str] = None,
         headed: bool = False,
+        browser: Optional[str] = None,
     ) -> Dict[str, Any]:
         self._clear_stale_lock()
+        self._clear_stale_socket()
         args = ["open"]
         if persistent:
             args.append("--persistent")
@@ -264,6 +308,8 @@ class PlaywrightService:
             args.extend(["--profile", profile])
         if headed:
             args.append("--headed")
+        if browser:
+            args.extend(["--browser", browser])
         if url:
             args.append(url)
         try:
@@ -295,6 +341,8 @@ class PlaywrightService:
                 logger.debug(
                     "browser_open: cleanup failed — browser may be genuinely in use"
                 )
+            # Always clear stale socket files — they survive process kills
+            self._clear_stale_socket()
             return self._page_info_cmd(args)
 
     def browser_close(self) -> Dict[str, Any]:

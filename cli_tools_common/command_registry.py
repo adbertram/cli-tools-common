@@ -169,6 +169,10 @@ def register_commands(
                 raise typer.Exit()
             return
 
+        # Skip credential check when --help is requested on a subcommand
+        if "--help" in sys.argv or "-h" in sys.argv:
+            return
+
         cred_types = cred_map.get(invoked)
         if not cred_types:
             # Command not in credential map — allow through

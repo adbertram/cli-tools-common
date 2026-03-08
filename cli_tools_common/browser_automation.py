@@ -40,17 +40,20 @@ class BrowserAutomationError(Exception):
 
 class AuthResult:
     """Result of an authentication check. Truthy when authenticated."""
-    __slots__ = ('authenticated', 'live_check')
+    __slots__ = ('authenticated', 'available', 'live_check')
 
-    def __init__(self, authenticated: bool, live_check: bool):
+    def __init__(self, authenticated: bool, live_check: bool, available: bool = None):
         self.authenticated = authenticated
         self.live_check = live_check
+        # available defaults to same as authenticated when not explicitly set
+        self.available = available if available is not None else authenticated
 
     def __bool__(self):
         return self.authenticated
 
     def __repr__(self):
-        return f"AuthResult(authenticated={self.authenticated}, live_check={self.live_check})"
+        return (f"AuthResult(authenticated={self.authenticated}, "
+                f"available={self.available}, live_check={self.live_check})")
 
 
 class BrowserAutomation:
@@ -69,6 +72,7 @@ class BrowserAutomation:
     AUTH_COOKIE_PATTERNS = []    # Cookie name regexes indicating auth
     AUTH_SUCCESS_URL = ""        # URL pattern indicating successful login
     AUTH_SUCCESS_SELECTOR = ""   # Playwright selector visible when authenticated
+    AUTH_UNAVAILABLE_SELECTOR = ""  # Playwright selector — if visible, authenticated but not available
     AUTH_STORAGE_KEY = ""        # localStorage key; True if key exists and has a value
     LOGIN_TIMEOUT = 300          # Seconds to wait for manual login
     SESSION_NAME = ""            # Named session for playwright --session flag
@@ -93,7 +97,8 @@ class BrowserAutomation:
     def _session_name(self) -> str:
         if self.SESSION_NAME:
             return self.SESSION_NAME
-        return self.config.__class__.__name__.lower().replace("config", "")
+        name = self.config.__class__.__name__.lower().replace("config", "")
+        return name or "default"
 
     def _get_service(self) -> PlaywrightService:
         """Get a PlaywrightService instance for this session."""
@@ -143,13 +148,14 @@ class BrowserAutomation:
             page = self.get_page(self.AUTH_CHECK_URL)
             page.wait_for_timeout(2000)
             result = self._check_auth(page)
-            logger.debug("is_authenticated: live check result=%s", result)
+            available = self._check_available(page) if result else False
+            logger.debug("is_authenticated: live check result=%s available=%s", result, available)
             if result:
                 self._auth_verified_at = time.time()
-            return AuthResult(authenticated=result, live_check=True)
+            return AuthResult(authenticated=result, available=available, live_check=True)
         except Exception as e:
             logger.debug("is_authenticated: live check failed: %s", e)
-            return AuthResult(authenticated=False, live_check=True)
+            return AuthResult(authenticated=False, available=False, live_check=True)
 
     def authenticate(self, force: bool = False):
         """Interactive login via headed persistent browser.
@@ -178,7 +184,7 @@ class BrowserAutomation:
         logger.debug("authenticate: launching headed persistent browser -> %s", self.LOGIN_URL)
         svc = self._get_service()
         try:
-            svc.browser_open(self.LOGIN_URL, persistent=True, headed=True)
+            svc.browser_open(self.LOGIN_URL, persistent=True, headed=True, browser="chrome")
         except PlaywrightServiceError as e:
             logger.debug("authenticate: browser open FAILED: %s", e)
             raise BrowserAutomationError(f"Failed to open browser: {e}") from e
@@ -467,6 +473,24 @@ class BrowserAutomation:
         result = not self._is_login_page(page)
         logger.debug("_check_auth: fallback (not login page) = %s", result)
         return result
+
+    def _check_available(self, page) -> bool:
+        """Check if the page is available (no blocking elements).
+
+        Returns False if AUTH_UNAVAILABLE_SELECTOR is set and visible,
+        meaning the session is authenticated but the page requires
+        additional verification (e.g. email confirmation).
+        """
+        if not self.AUTH_UNAVAILABLE_SELECTOR:
+            return True
+        try:
+            visible = page.locator(self.AUTH_UNAVAILABLE_SELECTOR).first.is_visible(timeout=500)
+            logger.debug("_check_available: selector=%r visible=%s → available=%s",
+                         self.AUTH_UNAVAILABLE_SELECTOR, visible, not visible)
+            return not visible
+        except Exception as e:
+            logger.debug("_check_available: check failed: %s (assuming available)", e)
+            return True
 
     def _on_authenticated(self, page) -> None:
         """Called after successful authentication with a headless page.

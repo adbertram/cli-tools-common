@@ -81,10 +81,11 @@ class AuthVerifier:
 
         # 3. Browser session live check
         if has_browser:
-            browser_live = self._check_browser()
-            if browser_live is not None:
-                result["browser_session"] = browser_live
-                browser_ok_result = browser_live
+            browser_check = self._check_browser()
+            if browser_check is not None:
+                result["browser_session"] = browser_check["authenticated"]
+                result["browser_available"] = browser_check["available"]
+                browser_ok_result = browser_check["authenticated"]
 
         # Determine authenticated: dual-auth uses OR, single-type uses AND
         is_dual_auth = has_browser and (has_oauth or has_api)
@@ -144,16 +145,20 @@ class AuthVerifier:
         except Exception as e:
             return f"failed: {e}"
 
-    def _check_browser(self) -> Optional[bool]:
-        """Check browser session via live headless check."""
+    def _check_browser(self) -> Optional[dict]:
+        """Check browser session via live headless check.
+
+        Returns dict with 'authenticated' and 'available' keys,
+        or None if no browser is configured.
+        """
         browser = self.config.get_browser()
         if browser is None:
             return None
         try:
             result = browser.is_authenticated()
-            return bool(result)
+            return {"authenticated": bool(result), "available": result.available}
         except Exception:
-            return False
+            return {"authenticated": False, "available": False}
         finally:
             try:
                 browser.close()

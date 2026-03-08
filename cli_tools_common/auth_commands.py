@@ -248,7 +248,7 @@ def create_auth_app(
                         status_data[field.lower()] = mask_value(value)
 
             # Conditional fields from verification
-            for key in ("oauth_status", "api_test", "browser_session"):
+            for key in ("oauth_status", "api_test", "browser_session", "browser_available"):
                 if key in auth_result:
                     status_data[key] = auth_result[key]
 

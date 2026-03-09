@@ -193,26 +193,105 @@ class BrowserAutomation:
             raise BrowserAutomationError(f"Failed to open browser: {e}") from e
         logger.debug("authenticate: browser open succeeded")
 
-        # Poll until login is detected — checks both URL change and success selector
+        # Poll until login is detected.
+        # Strategy: check the original page first (works for same-origin flows),
+        # then fall back to opening a test page in the same context (required for
+        # cross-origin SAML/SSO where Playwright loses track of the original page
+        # after the IdP POST-back navigates across origins).
         deadline = time.time() + self.LOGIN_TIMEOUT
         poll_count = 0
+        check_url = self.AUTH_CHECK_URL or self.LOGIN_URL
+        logger.debug("authenticate: starting poll loop — timeout=%ds check_url=%s AUTH_URL_PATTERN=%r AUTH_COOKIE_PATTERNS=%s",
+                     self.LOGIN_TIMEOUT, check_url, self.AUTH_URL_PATTERN, self.AUTH_COOKIE_PATTERNS)
         while time.time() < deadline:
             time.sleep(2)
             poll_count += 1
+
+            # Log raw page state before checks
             try:
+                raw_url = svc.url
+                logger.debug("authenticate: poll #%d — raw svc.url=%r", poll_count, raw_url)
+            except Exception as url_e:
+                logger.debug("authenticate: poll #%d — svc.url FAILED: %s", poll_count, url_e)
+                raw_url = "<error>"
+
+            # Log browser context page count
+            try:
+                if svc._browser_context is not None:
+                    ctx_pages = svc._browser_context.pages
+                    ctx_urls = []
+                    for i, p in enumerate(ctx_pages):
+                        try:
+                            ctx_urls.append(f"page[{i}]={p.url} closed={p.is_closed()}")
+                        except Exception:
+                            ctx_urls.append(f"page[{i}]=<error>")
+                    logger.debug("authenticate: poll #%d — context has %d pages: %s",
+                                 poll_count, len(ctx_pages), ctx_urls)
+                else:
+                    logger.debug("authenticate: poll #%d — _browser_context is None!", poll_count)
+            except Exception as ctx_e:
+                logger.debug("authenticate: poll #%d — context inspection failed: %s", poll_count, ctx_e)
+
+            try:
+                logger.debug("authenticate: poll #%d — calling _check_auth(svc)...", poll_count)
                 is_authed = self._check_auth(svc)
+                logger.debug("authenticate: poll #%d — calling _is_login_page(svc)...", poll_count)
                 is_login = self._is_login_page(svc)
-                logger.debug("authenticate: poll #%d url=%r is_login_page=%s is_authenticated=%s",
-                             poll_count, svc.url, is_login, is_authed)
+                logger.debug("authenticate: poll #%d RESULT: url=%r is_login_page=%s is_authenticated=%s",
+                             poll_count, raw_url, is_login, is_authed)
                 if is_authed:
-                    logger.debug("authenticate: login detected (auth check passed)")
+                    logger.debug("authenticate: login detected (auth check passed) at poll #%d", poll_count)
                     break
                 if self.AUTH_URL_PATTERN and not is_login:
-                    logger.debug("authenticate: login detected (no longer on login page)")
+                    logger.debug("authenticate: login detected (no longer on login page) at poll #%d", poll_count)
                     break
+
+                # Cross-origin SAML/SSO workaround: Playwright can lose its
+                # page reference after the IdP POST-back.  Open a new tab in
+                # the same persistent context and check if cookies let us
+                # through without a login redirect.
+                logger.debug("authenticate: poll #%d — trying cross-origin workaround (context=%s)",
+                             poll_count, svc._browser_context is not None)
+                if svc._browser_context is not None:
+                    test_page = None
+                    try:
+                        test_page = svc._browser_context.new_page()
+                        logger.debug("authenticate: poll #%d — test_page created, navigating to %s",
+                                     poll_count, check_url)
+                        test_page.goto(check_url, timeout=15000,
+                                       wait_until="domcontentloaded")
+                        test_url = test_page.url
+                        logger.debug("authenticate: poll #%d — test_page final url=%s",
+                                     poll_count, test_url)
+                        is_test_login = self._is_login_page_url(test_url)
+                        logger.debug("authenticate: poll #%d — test_page is_login_page=%s",
+                                     poll_count, is_test_login)
+                        if not is_test_login:
+                            # Also check cookies on the test page context
+                            try:
+                                test_cookies = svc._browser_context.cookies()
+                                test_cookie_names = [c.get('name', '?') for c in test_cookies]
+                                logger.debug("authenticate: poll #%d — test_page context cookies (%d): %s",
+                                             poll_count, len(test_cookies), test_cookie_names)
+                            except Exception:
+                                pass
+                            logger.debug("authenticate: login detected via test page at poll #%d", poll_count)
+                            test_page.close()
+                            break
+                    except Exception as tp_e:
+                        logger.debug("authenticate: poll #%d — test page probe FAILED: %s (type=%s)",
+                                     poll_count, tp_e, type(tp_e).__name__)
+                    finally:
+                        if test_page is not None:
+                            try:
+                                test_page.close()
+                            except Exception:
+                                pass
+
             except Exception as e:
                 # Browser may have been closed by user — check if session is gone
-                logger.debug("authenticate: poll exception (browser closed?): %s", e)
+                logger.debug("authenticate: poll #%d EXCEPTION (browser closed?): %s (type=%s)",
+                             poll_count, e, type(e).__name__)
                 break
         else:
             logger.debug("authenticate: login timed out after %ds", self.LOGIN_TIMEOUT)
@@ -400,12 +479,20 @@ class BrowserAutomation:
     # ==================== Overridable Hooks ====================
 
     def _is_login_page(self, page) -> bool:
-        url = page.url
+        try:
+            url = page.url
+        except Exception as e:
+            logger.debug("_is_login_page: page.url raised: %s", e)
+            return False
+        logger.debug("_is_login_page: page.url=%s", url)
+        return self._is_login_page_url(url)
+
+    def _is_login_page_url(self, url: str) -> bool:
         if self.AUTH_URL_PATTERN:
             result = bool(re.search(self.AUTH_URL_PATTERN, url))
-            logger.debug("_is_login_page: url=%s pattern=%r match=%s", url, self.AUTH_URL_PATTERN, result)
+            logger.debug("_is_login_page_url: url=%s pattern=%r match=%s", url, self.AUTH_URL_PATTERN, result)
             return result
-        logger.debug("_is_login_page: no AUTH_URL_PATTERN, returning False")
+        logger.debug("_is_login_page_url: no AUTH_URL_PATTERN, returning False")
         return False
 
     def _check_auth(self, page) -> bool:
@@ -420,28 +507,55 @@ class BrowserAutomation:
         4. AUTH_SUCCESS_URL — URL matches success pattern
         5. Fallback — current URL is not a login page
         """
-        url = page.url
+        try:
+            url = page.url
+        except Exception as e:
+            logger.debug("_check_auth: page.url raised: %s", e)
+            url = "<error>"
+
+        logger.debug("_check_auth: BEGIN url=%s", url)
+
+        # Log browser context state
+        try:
+            ctx = getattr(page, '_browser_context', None)
+            if ctx is not None:
+                pages = ctx.pages
+                page_urls = [getattr(p, 'url', '?') for p in pages]
+                logger.debug("_check_auth: browser_context has %d pages: %s", len(pages), page_urls)
+            else:
+                logger.debug("_check_auth: no _browser_context attribute on page")
+        except Exception as e:
+            logger.debug("_check_auth: error inspecting browser_context: %s", e)
 
         # 0. Login/auth page check — takes priority over all other checks.
         # A page matching AUTH_URL_PATTERN is an intermediate auth step
         # (login, confirmation code, 2FA, etc.) where cookies from a prior
         # session may still be present but the user is not fully authenticated.
-        if self._is_login_page(page):
+        is_login = self._is_login_page(page)
+        logger.debug("_check_auth: step 0 _is_login_page=%s", is_login)
+        if is_login:
             logger.debug("_check_auth: on login/auth page (url=%s), returning False", url)
             return False
 
         # 1. Cookie check
         if self.AUTH_COOKIE_PATTERNS:
+            logger.debug("_check_auth: step 1 cookie check (patterns=%s)", self.AUTH_COOKIE_PATTERNS)
             try:
                 cookies = page.cookie_list()
+                logger.debug("_check_auth: cookie_list() returned %d cookies", len(cookies))
+                cookie_names = [c.get('name', '?') for c in cookies]
+                logger.debug("_check_auth: all cookie names: %s", cookie_names)
                 auth_cookies = self._get_auth_cookies(cookies)
                 has_cookies = len(auth_cookies) > 0
                 logger.debug("_check_auth: cookie check — %d auth cookies "
                              "(patterns=%s, total_cookies=%d)",
                              len(auth_cookies), self.AUTH_COOKIE_PATTERNS, len(cookies))
+                if auth_cookies:
+                    logger.debug("_check_auth: matched auth cookies: %s",
+                                 [c.get('name') for c in auth_cookies])
                 return has_cookies
             except Exception as e:
-                logger.debug("_check_auth: cookie check failed: %s", e)
+                logger.debug("_check_auth: cookie check EXCEPTION: %s (type=%s)", e, type(e).__name__)
                 return False
 
         # 2. DOM element check

@@ -79,18 +79,34 @@ class PlaywrightService:
         return d
 
     def _get_page(self):
-        """Return the active page, raising if browser is not open."""
+        """Return the active page, raising if browser is not open.
+
+        Tracks the most recently opened page in the browser context.
+        This is critical for SAML/SSO flows where the identity provider
+        postback may create a new page/tab (the original page stays at
+        the IdP URL while the authenticated session lands on a new page).
+        """
         if self._page is None or self._browser_context is None:
             raise PlaywrightServiceError(
                 f"No browser open for session '{self.session}'. Call browser_open() first."
             )
-        # If the page was closed (navigated away, etc.), get the last open one
+        pages = self._browser_context.pages
+        if not pages:
+            raise PlaywrightServiceError("All pages have been closed.")
+        # If the page was closed, switch to the last open one
         if self._page.is_closed():
-            pages = self._browser_context.pages
-            if pages:
-                self._page = pages[-1]
-            else:
-                raise PlaywrightServiceError("All pages have been closed.")
+            self._page = pages[-1]
+            return self._page
+        # If new pages were created (e.g. SAML postback opened a new tab),
+        # switch to the newest page so callers see the post-redirect URL
+        if len(pages) > 1 and pages[-1] is not self._page:
+            logger.debug(
+                "_get_page: new page detected (total=%d), switching from %s to %s",
+                len(pages),
+                getattr(self._page, 'url', '?'),
+                getattr(pages[-1], 'url', '?'),
+            )
+            self._page = pages[-1]
         return self._page
 
     def _page_info(self, page=None) -> Dict[str, Any]:
@@ -316,6 +332,17 @@ class PlaywrightService:
                 self._page = pages[0]
             else:
                 self._page = self._browser_context.new_page()
+
+            # Track new pages/tabs as they open (critical for SAML/SSO
+            # flows where the IdP postback may create a new page).
+            def _on_new_page(new_page):
+                logger.debug(
+                    "browser_open: new page opened -> %s (was %s)",
+                    getattr(new_page, 'url', '?'),
+                    getattr(self._page, 'url', '?'),
+                )
+                self._page = new_page
+            self._browser_context.on("page", _on_new_page)
 
             if url:
                 self._page.goto(url, timeout=timeout_ms)

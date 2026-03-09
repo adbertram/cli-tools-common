@@ -80,6 +80,7 @@ class BrowserAutomation:
     def __init__(self, config):
         self.config = config
         self._page: Optional[PlaywrightService] = None
+        self._service: Optional[PlaywrightService] = None
         self._auth_verified_at: float = 0
 
     # --- Config accessors ---
@@ -101,8 +102,10 @@ class BrowserAutomation:
         return name or "default"
 
     def _get_service(self) -> PlaywrightService:
-        """Get a PlaywrightService instance for this session."""
-        return PlaywrightService(self._session_name())
+        """Get a cached PlaywrightService instance for this session."""
+        if self._service is None:
+            self._service = PlaywrightService(self._session_name())
+        return self._service
 
     def _marker_path(self) -> Path:
         p = self._get_browser_data_dir() / "profile.json"
@@ -371,6 +374,7 @@ class BrowserAutomation:
         except PlaywrightServiceError:
             pass
         self._page = None
+        self._service = None
 
     def test_session(self) -> Dict[str, Any]:
         """Headless verification — navigate to AUTH_CHECK_URL and check auth."""

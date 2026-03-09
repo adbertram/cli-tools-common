@@ -7,8 +7,6 @@ import json
 import re
 from typing import TYPE_CHECKING, Any, Dict, List
 
-from ._parsers import _parse_cookie_list
-
 if TYPE_CHECKING:
     from .service import PlaywrightService
 
@@ -20,10 +18,10 @@ class _ServiceContext:
         self._svc = svc
 
     def cookies(self, urls: List[str] = None) -> List[Dict[str, Any]]:
-        result = self._svc._run(["cookie-list"], check=False)
-        if result.returncode != 0:
+        try:
+            cookies = self._svc.cookie_list()
+        except Exception:
             return []
-        cookies = _parse_cookie_list(result.stdout)
         if urls and cookies:
             domains = set()
             for url in urls:
@@ -48,7 +46,10 @@ class _ServiceContext:
             name = cookie.get("name", "")
             value = cookie.get("value", "")
             if name and value:
-                self._svc._run(["cookie-set", name, value], check=False)
+                try:
+                    self._svc.cookie_set(name, value)
+                except Exception:
+                    pass
 
     @property
     def pages(self) -> List[PlaywrightService]:

@@ -70,7 +70,7 @@ class _ServiceElement:
 
     def press(self, key: str) -> None:
         self._eval_on_el("if (el) el.focus();")
-        self._svc._run(["press", key])
+        self._svc.keyboard_press(key)
 
     def text_content(self) -> Optional[str]:
         return self._eval_on_el("return el ? el.textContent : null;")
@@ -210,7 +210,7 @@ class _ServiceLocator:
 
     def press(self, key: str) -> None:
         self._eval_on_first("el.focus();")
-        self._svc._run(["press", key])
+        self._svc.keyboard_press(key)
 
     def count(self) -> int:
         result = self._svc.evaluate(f"() => ({self._js_find_all()}).length")

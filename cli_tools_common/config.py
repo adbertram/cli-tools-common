@@ -1,6 +1,7 @@
 """Base configuration with profile-aware env loading."""
 
 import os
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -77,6 +78,23 @@ def list_env_files(tool_dir: Path) -> list:
         if f.name != ".env.example":
             files.append(f)
     return files
+
+
+def _get_profiles_base_dir(tool_name: str) -> Path:
+    """Get the platform-appropriate .profiles/ directory for a tool.
+
+    Uses user data directories:
+    - Linux/macOS: ~/.local/share/cli-tools/<tool-name>/.profiles/
+    - Windows: %APPDATA%/cli-tools/<tool-name>/.profiles/
+
+    Args:
+        tool_name: Name of the CLI tool (directory name).
+    """
+    if os.name == "nt":
+        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return base / "cli-tools" / tool_name / ".profiles"
 
 
 class BaseConfig:
@@ -361,8 +379,26 @@ class BaseConfig:
     # ==================== Profile Data Directories ====================
 
     def get_profiles_dir(self) -> Path:
-        """Get .profiles/ directory for runtime data."""
-        return self.tool_dir / ".profiles"
+        """Get .profiles/ directory for runtime data.
+
+        Uses platform-appropriate user data directories:
+        - Linux/macOS: ~/.local/share/cli-tools/<tool-name>/.profiles/
+        - Windows: %APPDATA%/cli-tools/<tool-name>/.profiles/
+
+        Automatically migrates from the old location (tool_dir/.profiles/)
+        on first access if the new location doesn't exist yet.
+        """
+        new_dir = _get_profiles_base_dir(self.tool_dir.name)
+
+        # Migration: move old location to new location if needed
+        old_dir = self.tool_dir / ".profiles"
+        if old_dir.exists() and not new_dir.exists():
+            new_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(old_dir, new_dir)
+            shutil.rmtree(old_dir)
+            print(f"Migrated profile data: {old_dir} -> {new_dir}")
+
+        return new_dir
 
     def get_profile_data_dir(self) -> Path:
         """Get data directory for the active profile."""

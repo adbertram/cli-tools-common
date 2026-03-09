@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .config import (
     _env_path_for_profile,
+    _get_profiles_base_dir,
     _profile_name_from_path,
     _read_is_default_profile,
     list_env_files,
@@ -101,10 +102,14 @@ def delete_profile(tool_dir: Path, name: str):
 
     target.unlink()
 
-    # Clean up profile data directory
-    profile_data_dir = tool_dir / ".profiles" / name
+    # Clean up profile data directory (new XDG location)
+    profile_data_dir = _get_profiles_base_dir(tool_dir.name) / name
     if profile_data_dir.exists():
         shutil.rmtree(profile_data_dir)
+    # Also clean up legacy location if it exists
+    legacy_data_dir = tool_dir / ".profiles" / name
+    if legacy_data_dir.exists():
+        shutil.rmtree(legacy_data_dir)
 
 
 def _set_is_default_in_file(env_path: Path, is_default: bool):

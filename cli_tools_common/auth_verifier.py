@@ -46,8 +46,10 @@ class AuthVerifier:
           oauth_status      - Optional[str]: "valid"|"refreshed"|"expired"|"no_token"
           api_test          - Optional[str]: "passed"|"failed: ..."|"skipped"
 
-        For dual-auth tools (e.g. OAUTH + BROWSER_SESSION), uses OR logic:
-        authenticated is True if any credential pathway is live-verified.
+        For dual-auth tools (e.g. OAUTH + BROWSER_SESSION), uses AND logic:
+        authenticated is True only when ALL credential pathways are live.
+        This prevents false positives where OAuth is valid but browser
+        session is expired (which would cause browser operations to fail).
         """
         cred_types = self.config._resolved_credential_types
         result = {"credentials_saved": self.config.has_credentials()}
@@ -57,7 +59,7 @@ class AuthVerifier:
         has_browser = bool(cred_set & self.BROWSER_TYPES)
         has_api = bool(cred_set & self.API_TYPES)
 
-        # Track per-category verification results for OR logic
+        # Track per-category verification results for AND logic
         # None = not applicable, True = passed, False = failed
         non_browser_ok = None
         browser_ok_result = None
@@ -87,17 +89,19 @@ class AuthVerifier:
                 result["browser_available"] = browser_check["available"]
                 browser_ok_result = browser_check["authenticated"]
 
-        # Determine authenticated: dual-auth uses OR, single-type uses AND
+        # Determine authenticated: dual-auth uses AND (all credential
+        # pathways must be live), because browser operations will fail if
+        # the browser session is expired even when OAuth/API keys are valid.
         is_dual_auth = has_browser and (has_oauth or has_api)
 
         if is_dual_auth:
-            # OR: at least one credential pathway must be live
-            any_ok = False
-            if non_browser_ok is True:
-                any_ok = True
-            if browser_ok_result is True:
-                any_ok = True
-            result["authenticated"] = any_ok
+            # AND: all credential pathways must be live
+            all_ok = True
+            if non_browser_ok is not None and not non_browser_ok:
+                all_ok = False
+            if browser_ok_result is not None and not browser_ok_result:
+                all_ok = False
+            result["authenticated"] = all_ok
         else:
             # Single-type: all checks must pass (original AND behavior)
             all_ok = result["credentials_saved"]

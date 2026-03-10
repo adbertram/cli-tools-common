@@ -112,15 +112,35 @@ class BrowserAutomation:
         logger.debug("_marker_path: %s (exists=%s)", p, p.exists())
         return p
 
-    def _write_marker(self) -> None:
-        """Write the session marker file."""
+    def _read_marker(self) -> dict:
+        """Read the session marker file, returning {} if missing or invalid."""
+        marker = self._marker_path()
+        if not marker.exists():
+            return {}
+        try:
+            data = json.loads(marker.read_text())
+            logger.debug("_read_marker: %s -> %s", marker, data)
+            return data
+        except (json.JSONDecodeError, OSError) as e:
+            logger.debug("_read_marker: failed to read %s: %s", marker, e)
+            return {}
+
+    def _write_marker(self, **extra) -> None:
+        """Write the session marker file.
+
+        Any keyword arguments are merged into the marker data (e.g.
+        ``browser="chrome"`` to record which browser channel was used
+        during authentication).
+        """
         marker = self._marker_path()
         marker.parent.mkdir(parents=True, exist_ok=True)
-        marker_data = json.dumps({
+        marker_data_dict = {
             "session": self._session_name(),
             "authenticated": True,
             "timestamp": time.time(),
-        })
+        }
+        marker_data_dict.update(extra)
+        marker_data = json.dumps(marker_data_dict)
         marker.write_text(marker_data)
         logger.debug("_write_marker: wrote %s: %s", marker, marker_data)
 
@@ -263,7 +283,7 @@ class BrowserAutomation:
         self.close()
         svc.clear_session_metadata()
 
-        self._write_marker()
+        self._write_marker(browser="chrome")
         self._auth_verified_at = time.time()
 
         # Post-auth hook
@@ -331,10 +351,16 @@ class BrowserAutomation:
             has_state = state_file.exists()
             open_url = None if has_state else target_url
 
-            logger.debug("get_page: no running daemon, opening new one -> %s (has_state=%s)",
-                         open_url or "about:blank", has_state)
+            # Read the browser channel from the marker file so headless
+            # sessions use the same browser binary as the login session.
+            # This avoids User-Agent / TLS fingerprint mismatches that
+            # cause sites to treat the headless session as a new device.
+            marker_data = self._read_marker()
+            auth_browser = marker_data.get("browser")
+            logger.debug("get_page: no running daemon, opening new one -> %s (has_state=%s, browser=%s)",
+                         open_url or "about:blank", has_state, auth_browser)
             try:
-                svc.browser_open(open_url, persistent=True)
+                svc.browser_open(open_url, persistent=True, browser=auth_browser)
                 fresh_session = True
             except PlaywrightServiceError as e:
                 raise BrowserAutomationError(str(e)) from e
@@ -390,6 +416,17 @@ class BrowserAutomation:
 
     def close(self) -> None:
         logger.debug("close: closing browser session")
+        # Save refreshed auth state (cookies, localStorage) before closing
+        # so that server-refreshed session cookies are preserved for the
+        # next headless session.  Only save if we have an active page and
+        # a session marker (i.e. we were authenticated).
+        if self._page is not None and self._marker_path().exists():
+            state_file = self._get_browser_data_dir() / "auth-state.json"
+            try:
+                self._get_service().state_save(str(state_file))
+                logger.debug("close: saved refreshed auth state to %s", state_file)
+            except Exception as e:
+                logger.debug("close: state_save before close failed (non-fatal): %s", e)
         try:
             self._get_service().browser_close()
         except PlaywrightServiceError:

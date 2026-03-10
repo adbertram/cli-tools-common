@@ -222,6 +222,16 @@ class BrowserAutomation:
                     if not is_login:
                         logger.debug("authenticate: login detected (left login page)")
                         break
+                    # Check auth selector even if URL still matches login pattern
+                    # (some sites show 404 on /login for logged-in users without redirecting)
+                    elif self.AUTH_SUCCESS_SELECTOR:
+                        try:
+                            visible = svc.locator(self.AUTH_SUCCESS_SELECTOR).first.is_visible(timeout=500)
+                            if visible:
+                                logger.debug("authenticate: login detected (auth selector visible despite URL match)")
+                                break
+                        except Exception as e:
+                            logger.debug("authenticate: auth selector check failed: %s", e)
             except Exception as e:
                 logger.debug("authenticate: poll #%d exception: %s", poll_count, e)
                 break

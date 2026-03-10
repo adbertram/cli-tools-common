@@ -286,20 +286,29 @@ class BrowserAutomation:
         self._write_marker(browser="chrome")
         self._auth_verified_at = time.time()
 
-        # Post-auth hook
-        logger.debug("authenticate: running post-auth hook (_on_authenticated) with AUTH_CHECK_URL=%s",
-                     self.AUTH_CHECK_URL)
-        try:
-            page = self.get_page(self.AUTH_CHECK_URL)
-            page.wait_for_timeout(2000)
-            current_url = page.url
-            logger.debug("authenticate: post-auth page url=%s", current_url)
-            self._on_authenticated(page)
-            logger.debug("authenticate: _on_authenticated completed successfully")
-        except Exception as e:
-            logger.debug("authenticate: post-auth hook exception (swallowed): %s", e)
-        finally:
-            self.close()
+        # Post-auth hook — only open a new browser session if the subclass
+        # actually overrides _on_authenticated.  The base-class method is a
+        # no-op, so launching a headless browser just to call it is wasteful
+        # and can corrupt the session (e.g. Bricklink redirects the headless
+        # session to confirmation_code_required, invalidating the login).
+        has_hook = type(self)._on_authenticated is not BrowserAutomation._on_authenticated
+        logger.debug("authenticate: _on_authenticated overridden=%s", has_hook)
+        if has_hook:
+            logger.debug("authenticate: running post-auth hook with AUTH_CHECK_URL=%s",
+                         self.AUTH_CHECK_URL)
+            try:
+                page = self.get_page(self.AUTH_CHECK_URL)
+                page.wait_for_timeout(2000)
+                current_url = page.url
+                logger.debug("authenticate: post-auth page url=%s", current_url)
+                self._on_authenticated(page)
+                logger.debug("authenticate: _on_authenticated completed successfully")
+            except Exception as e:
+                logger.debug("authenticate: post-auth hook exception (swallowed): %s", e)
+            finally:
+                self.close()
+        else:
+            logger.debug("authenticate: skipping post-auth hook (no override)")
 
         logger.debug("authenticate: complete")
         print_success("Authentication complete.")

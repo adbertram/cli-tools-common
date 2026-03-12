@@ -24,11 +24,18 @@ def _prompt_and_save(config, prompts, skip_if_set: bool = True) -> bool:
     Returns:
         True if any field was prompted.
     """
+    instructions_shown = False
     prompted = False
     for field_name, prompt_text, hide in prompts:
         current = config._get(field_name)
         if current and skip_if_set:
             continue
+        # Show LOGIN_INSTRUCTIONS once before the first prompt
+        if not instructions_shown:
+            instructions = getattr(config, "LOGIN_INSTRUCTIONS", None)
+            if instructions:
+                print_info(instructions)
+            instructions_shown = True
         prompted = True
         value = typer.prompt(f"Enter {prompt_text}", hide_input=hide)
         if not value or not value.strip():

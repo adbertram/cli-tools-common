@@ -201,7 +201,7 @@ class BrowserAutomation:
             self.clear_session()
 
         print_info(f"Opening browser for login at: {self.LOGIN_URL}")
-        print_info("Please log in in the browser window...")
+        print_info("Log in, then close the browser when done.")
 
         # browser open is non-blocking — it launches the browser and returns
         logger.debug("authenticate: launching headed persistent browser -> %s", self.LOGIN_URL)
@@ -213,102 +213,42 @@ class BrowserAutomation:
             raise BrowserAutomationError(f"Failed to open browser: {e}") from e
         logger.debug("authenticate: browser open succeeded")
 
-        # Poll until login is detected.
-        # Two strategies based on configuration:
-        # - AUTH_COOKIE_PATTERNS: poll context-wide cookies (works across
-        #   cross-origin SAML redirects without page tracking)
-        # - URL-based: poll page URL until it leaves the login page
-        deadline = time.time() + self.LOGIN_TIMEOUT
+        # Wait for the user to close the browser.  Periodically save state
+        # so session-only cookies (no expiry) are captured before Chrome
+        # discards them on exit.
+        state_file = self._get_browser_data_dir() / "auth-state.json"
         poll_count = 0
-        while time.time() < deadline:
+        while True:
             time.sleep(2)
             poll_count += 1
             try:
-                if self.AUTH_COOKIE_PATTERNS:
-                    # Cookie check is context-wide — not affected by page tracking
-                    cookies = svc.cookie_list()
-                    auth_cookies = self._get_auth_cookies(cookies)
-                    logger.debug("authenticate: poll #%d url=%s auth_cookies=%d total=%d",
-                                 poll_count, svc.url, len(auth_cookies), len(cookies))
-                    if auth_cookies:
-                        logger.debug("authenticate: login detected (cookie: %s)",
-                                     [c.get('name') for c in auth_cookies])
-                        break
-                else:
-                    # URL-based fallback
-                    is_login = self._is_login_page(svc)
-                    logger.debug("authenticate: poll #%d url=%s is_login=%s",
-                                 poll_count, svc.url, is_login)
-                    if not is_login:
-                        logger.debug("authenticate: login detected (left login page)")
-                        break
-                    # Check auth selector even if URL still matches login pattern
-                    # (some sites show 404 on /login for logged-in users without redirecting)
-                    elif self.AUTH_SUCCESS_SELECTOR:
-                        try:
-                            visible = svc.locator(self.AUTH_SUCCESS_SELECTOR).first.is_visible(timeout=500)
-                            if visible:
-                                logger.debug("authenticate: login detected (auth selector visible despite URL match)")
-                                break
-                        except Exception as e:
-                            logger.debug("authenticate: auth selector check failed: %s", e)
+                # Access the page to check if browser is still open.
+                # _browser_context.pages is empty or throws when closed.
+                pages = svc._browser_context.pages if svc._browser_context else []
+                if not pages:
+                    logger.debug("authenticate: poll #%d browser closed (no pages)", poll_count)
+                    break
+                # Save state while browser is still open
+                try:
+                    svc.state_save(str(state_file))
+                    logger.debug("authenticate: poll #%d saved state (url=%s)",
+                                 poll_count, svc.url)
+                except Exception as e:
+                    logger.debug("authenticate: poll #%d state_save failed: %s",
+                                 poll_count, e)
             except Exception as e:
-                logger.debug("authenticate: poll #%d exception: %s", poll_count, e)
+                logger.debug("authenticate: poll #%d browser closed (exception: %s)",
+                             poll_count, e)
                 break
-        else:
-            logger.debug("authenticate: login timed out after %ds", self.LOGIN_TIMEOUT)
-            self.close()
-            raise BrowserAutomationError(
-                f"Login timed out after {self.LOGIN_TIMEOUT}s"
-            )
 
-        # Give cookies a moment to persist
-        logger.debug("authenticate: waiting 2s for cookies to persist")
-        time.sleep(2)
-
-        # Save browser state (cookies, localStorage) BEFORE closing the headed
-        # browser.  Session-only cookies (no expiry) are lost when Chrome closes
-        # because they are not persisted to the cookie database.  Saving state
-        # here lets us restore them when opening a headless session later.
-        state_file = self._get_browser_data_dir() / "auth-state.json"
-        try:
-            svc.state_save(str(state_file))
-            logger.debug("authenticate: saved auth state to %s", state_file)
-        except Exception as e:
-            logger.debug("authenticate: state_save failed (non-fatal): %s", e)
-
-        # Close the headed browser and clear session metadata so the next
-        # browser_open defaults to headless (the .session file remembers headed=true)
-        logger.debug("authenticate: closing headed browser")
-        self.close()
+        # Clean up — browser is already closed by the user
+        logger.debug("authenticate: browser closed by user, finalizing")
         svc.clear_session_metadata()
+        self._page = None
+        self._service = None
 
         self._write_marker(browser="chrome")
         self._auth_verified_at = time.time()
-
-        # Post-auth hook — only open a new browser session if the subclass
-        # actually overrides _on_authenticated.  The base-class method is a
-        # no-op, so launching a headless browser just to call it is wasteful
-        # and can corrupt the session (e.g. Bricklink redirects the headless
-        # session to confirmation_code_required, invalidating the login).
-        has_hook = type(self)._on_authenticated is not BrowserAutomation._on_authenticated
-        logger.debug("authenticate: _on_authenticated overridden=%s", has_hook)
-        if has_hook:
-            logger.debug("authenticate: running post-auth hook with AUTH_CHECK_URL=%s",
-                         self.AUTH_CHECK_URL)
-            try:
-                page = self.get_page(self.AUTH_CHECK_URL)
-                page.wait_for_timeout(2000)
-                current_url = page.url
-                logger.debug("authenticate: post-auth page url=%s", current_url)
-                self._on_authenticated(page)
-                logger.debug("authenticate: _on_authenticated completed successfully")
-            except Exception as e:
-                logger.debug("authenticate: post-auth hook exception (swallowed): %s", e)
-            finally:
-                self.close()
-        else:
-            logger.debug("authenticate: skipping post-auth hook (no override)")
 
         logger.debug("authenticate: complete")
         print_success("Authentication complete.")

@@ -40,6 +40,7 @@ from .profiles_commands import create_profiles_app
 from .command_registry import register_commands
 from .oauth import oauth_login, extract_code_from_input, generate_pkce_pair, build_token_auth_headers, parse_and_save_tokens
 from .token_manager import TokenManager
+from .app_factory import create_app, run_app
 from .activity_log import get_activity_logger
 from .output import (
     print_json,
@@ -53,6 +54,9 @@ from .output import (
 )
 
 __all__ = [
+    # App factory
+    "create_app",
+    "run_app",
     # Filters
     "FilterValidationError",
     "apply_filters",

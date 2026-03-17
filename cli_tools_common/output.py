@@ -16,7 +16,7 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 
-from .exceptions import ClientError
+from .exceptions import ClientError, CredentialError
 
 # Rich console for table output
 console = Console()
@@ -146,9 +146,7 @@ def _serialize_for_json(obj: Any) -> Any:
     """
     if isinstance(obj, str):
         return _sanitize_surrogates(obj)
-    elif isinstance(obj, BaseModel):
-        return _serialize_for_json(obj.model_dump())
-    elif hasattr(obj, "model_dump"):
+    elif isinstance(obj, BaseModel) or hasattr(obj, "model_dump"):
         return _serialize_for_json(obj.model_dump())
     elif hasattr(obj, "dict") and not isinstance(obj, dict):
         return _serialize_for_json(obj.dict())
@@ -190,16 +188,20 @@ def print_json(data: Any, indent: int = 2, exclude_none: bool = False):
     print(json.dumps(output, indent=indent, ensure_ascii=False, default=str))
 
 
-def print_output(data: Any, table: bool = False, indent: int = 2):
+def print_output(data: Any, table: bool = False, columns: List[str] = None, headers: List[str] = None, indent: int = 2):
     """Print data in the specified format (JSON or table).
+
+    When table=True, auto-derives column headers from dict keys if not provided.
 
     Args:
         data: Data to output.
         table: If True, output as table; otherwise as JSON.
+        columns: Optional list of column keys (auto-derived from data if None).
+        headers: Optional display headers (auto-derived as title-cased column names if None).
         indent: JSON indentation level (only used for JSON output).
     """
     if table:
-        print_table(data)
+        print_table(data, columns, headers)
     else:
         print_json(data, indent)
 
@@ -210,10 +212,8 @@ def print_error(message: str):
 
 
 def print_warning(message: str):
-    """Print warning message to stderr (yellow)."""
-    yellow = "\033[93m"
-    reset = "\033[0m"
-    print(f"{yellow}Warning: {message}{reset}", file=sys.stderr)
+    """Print warning message to stderr."""
+    print(f"Warning: {message}", file=sys.stderr)
 
 
 def print_success(message: str):
@@ -226,16 +226,32 @@ def print_info(message: str):
     print(message, file=sys.stderr)
 
 
+def command(fn):
+    """Decorator that wraps a Typer command with standard error handling.
+
+    Catches all exceptions except typer.Exit, passing others through handle_error.
+    """
+    import functools
+    import typer as _typer
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except _typer.Exit:
+            raise
+        except Exception as e:
+            raise _typer.Exit(handle_error(e))
+    return wrapper
+
+
 def handle_error(error: Exception) -> int:
     """Handle errors and return appropriate exit code.
 
     Returns:
         2 for credential errors, 1 for all other errors.
     """
-    if isinstance(error, ClientError):
-        print_error(str(error))
-        if "credential" in str(error).lower() or "missing" in str(error).lower():
-            return 2
-        return 1
     print_error(str(error))
+    if isinstance(error, CredentialError):
+        return 2
     return 1

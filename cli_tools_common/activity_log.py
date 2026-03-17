@@ -7,10 +7,21 @@ with stdout/stderr stream separation.
 
 import logging
 import os
+import platform
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-_LOG_DIR = Path.home() / "Library" / "Application Support" / "cli-tools"
+
+def _get_log_dir() -> Path:
+    """Return the platform-appropriate log directory."""
+    if os.name == "nt":
+        return Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "cli-tools"
+    if platform.system() == "Darwin":
+        return Path.home() / "Library" / "Application Support" / "cli-tools"
+    return Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "cli-tools"
+
+
+_LOG_DIR = _get_log_dir()
 _LOG_FILE = _LOG_DIR / "cli_tool_activity.txt"
 _MAX_BYTES = 5 * 1024 * 1024  # 5 MB
 _BACKUP_COUNT = 3

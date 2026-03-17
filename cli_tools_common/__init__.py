@@ -1,19 +1,6 @@
 """Shared utilities for CLI tools: auth, profiles, config, output, OAuth, browser."""
 
 from .config import BaseConfig
-
-
-def __getattr__(name):
-    """Lazy-load browser modules."""
-    if name in ("BrowserAutomation", "BrowserAutomationError", "AuthResult"):
-        from .browser_automation import BrowserAutomation, BrowserAutomationError, AuthResult
-        _browser_exports = {
-            "BrowserAutomation": BrowserAutomation,
-            "BrowserAutomationError": BrowserAutomationError,
-            "AuthResult": AuthResult,
-        }
-        return _browser_exports[name]
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 from .filters import (
     FilterValidationError,
     apply_filters,
@@ -34,8 +21,9 @@ from .credentials import (
     combined_login_prompts,
     combined_sensitive_fields,
 )
-from .exceptions import ClientError, ConfigError
+from .exceptions import ClientError, ConfigError, CredentialError
 from .auth_commands import create_auth_app
+from .cache_commands import create_cache_app
 from .profiles_commands import create_profiles_app
 from .command_registry import register_commands
 from .oauth import oauth_login, extract_code_from_input, generate_pkce_pair, build_token_auth_headers, parse_and_save_tokens
@@ -52,6 +40,20 @@ from .output import (
     print_info,
     handle_error,
 )
+
+
+def __getattr__(name):
+    """Lazy-load browser modules to avoid importing Playwright at package import time."""
+    if name in ("BrowserAutomation", "BrowserAutomationError", "AuthResult"):
+        from .browser_automation import BrowserAutomation, BrowserAutomationError, AuthResult
+        _browser_exports = {
+            "BrowserAutomation": BrowserAutomation,
+            "BrowserAutomationError": BrowserAutomationError,
+            "AuthResult": AuthResult,
+        }
+        return _browser_exports[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     # App factory
@@ -84,7 +86,9 @@ __all__ = [
     "combined_sensitive_fields",
     "ClientError",
     "ConfigError",
+    "CredentialError",
     "create_auth_app",
+    "create_cache_app",
     "create_profiles_app",
     "register_commands",
     "oauth_login",

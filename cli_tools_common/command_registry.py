@@ -24,18 +24,13 @@ from typing import Callable, Optional
 
 import typer
 
+from .auth_verifier import AuthVerifier
 from .credentials import CredentialType
 
 logger = logging.getLogger("cli_tools.command_registry")
 
 # Maps credential type string names (from COMMAND_CREDENTIALS) to CredentialType enum
 _CRED_TYPE_MAP = {ct.value: ct for ct in CredentialType}
-
-# Credential types that use OAuth token refresh
-_OAUTH_TYPES = frozenset({
-    CredentialType.OAUTH,
-    CredentialType.OAUTH_AUTHORIZATION_CODE,
-})
 
 
 def _check_credentials(
@@ -68,7 +63,7 @@ def _check_credentials(
         if cred_type == CredentialType.NO_AUTH:
             continue
 
-        if cred_type in _OAUTH_TYPES:
+        if cred_type in AuthVerifier.OAUTH_TYPES:
             # Check for access token, attempt refresh if expired
             if not config.access_token:
                 missing.append(f"  - {cred_type.value}: no access token")
@@ -92,9 +87,18 @@ def _check_credentials(
                 try:
                     if not browser.is_authenticated():
                         missing.append(f"  - {cred_type.value}: browser session expired")
+                        try:
+                            browser.close()
+                        except Exception:
+                            pass
+                    else:
+                        # Auth succeeded — keep the browser alive so the
+                        # command can reuse it instead of launching a second
+                        # Chromium instance.  Store on config for handoff.
+                        config._prewarmed_browser = browser
+                        logger.debug("Stashed prewarmed browser on config for reuse")
                 except Exception:
                     missing.append(f"  - {cred_type.value}: browser session check failed")
-                finally:
                     try:
                         browser.close()
                     except Exception:

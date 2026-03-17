@@ -4,10 +4,10 @@ import shutil
 from pathlib import Path
 
 from .config import (
-    _env_path_for_profile,
-    _get_profiles_base_dir,
-    _profile_name_from_path,
-    _read_is_default_profile,
+    env_path_for_profile,
+    get_profiles_base_dir,
+    profile_name_from_path,
+    read_is_default_profile,
     list_env_files,
 )
 from .exceptions import ConfigError
@@ -21,9 +21,9 @@ def list_profiles(tool_dir: Path) -> list:
     env_files = list_env_files(tool_dir)
     profiles = []
     for f in env_files:
-        is_default = _read_is_default_profile(f)
+        is_default = read_is_default_profile(f)
         profiles.append({
-            "name": _profile_name_from_path(f),
+            "name": profile_name_from_path(f),
             "file": f.name,
             "is_default": bool(is_default),
         })
@@ -43,7 +43,7 @@ def create_profile(tool_dir: Path, name: str) -> Path:
     Raises:
         ConfigError: If profile already exists or .env.example not found.
     """
-    target = _env_path_for_profile(tool_dir, name)
+    target = env_path_for_profile(tool_dir, name)
     if target.exists():
         raise ConfigError(f"Profile '{name}' already exists at {target}")
 
@@ -71,7 +71,7 @@ def set_default_profile(tool_dir: Path, name: str):
     Raises:
         ConfigError: If profile not found.
     """
-    target = _env_path_for_profile(tool_dir, name)
+    target = env_path_for_profile(tool_dir, name)
     if not target.exists():
         raise ConfigError(f"Profile '{name}' not found at {target}")
 
@@ -90,11 +90,11 @@ def delete_profile(tool_dir: Path, name: str):
     Raises:
         ConfigError: If profile not found or is the default.
     """
-    target = _env_path_for_profile(tool_dir, name)
+    target = env_path_for_profile(tool_dir, name)
     if not target.exists():
         raise ConfigError(f"Profile '{name}' not found at {target}")
 
-    if _read_is_default_profile(target) is True:
+    if read_is_default_profile(target) is True:
         raise ConfigError(
             f"Cannot delete default profile '{name}'. "
             "Set another profile as default first with 'profiles set-default <name>'."
@@ -103,7 +103,7 @@ def delete_profile(tool_dir: Path, name: str):
     target.unlink()
 
     # Clean up profile data directory (new XDG location)
-    profile_data_dir = _get_profiles_base_dir(tool_dir.name) / name
+    profile_data_dir = get_profiles_base_dir(tool_dir.name) / name
     if profile_data_dir.exists():
         shutil.rmtree(profile_data_dir)
     # Also clean up legacy location if it exists

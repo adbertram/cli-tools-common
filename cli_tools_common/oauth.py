@@ -113,14 +113,6 @@ def _capture_code_playwright(auth_url: str, redirect_uri: str, timeout: int) -> 
             time.sleep(poll_interval)
             elapsed += poll_interval
 
-        # Final check
-        try:
-            current_url = svc.url
-        except PlaywrightServiceError:
-            current_url = ""
-        if current_url and redirect_host in current_url and "code=" in current_url:
-            return extract_code_from_input(current_url)
-
         raise ValueError(
             f"Timed out waiting for redirect to {redirect_host} after {timeout}s"
         )
@@ -167,7 +159,6 @@ def oauth_login(config, force: bool) -> None:
     - OAUTH_SCOPES: scope strings
     - OAUTH_REDIRECT_URI: default redirect (overridable via .env REDIRECT_URI)
     - OAUTH_PKCE: enable PKCE S256
-    - OAUTH_STATE: generate + verify state param
     - OAUTH_TOKEN_AUTH: "basic" | "body" | "none"
     - OAUTH_EXTRA_AUTH_PARAMS: extra query params for auth URL
     - OAUTH_USE_PLAYWRIGHT: browser capture vs manual paste
@@ -197,11 +188,6 @@ def oauth_login(config, force: bool) -> None:
     if config.OAUTH_PKCE:
         code_verifier, code_challenge = generate_pkce_pair()
 
-    # State
-    state = None
-    if config.OAUTH_STATE:
-        state = secrets.token_urlsafe(32)
-
     # Build auth URL
     auth_params = {
         "client_id": config.client_id,
@@ -215,9 +201,6 @@ def oauth_login(config, force: bool) -> None:
     if code_challenge:
         auth_params["code_challenge"] = code_challenge
         auth_params["code_challenge_method"] = "S256"
-
-    if state:
-        auth_params["state"] = state
 
     if config.OAUTH_EXTRA_AUTH_PARAMS:
         auth_params.update(config.OAUTH_EXTRA_AUTH_PARAMS)
@@ -249,14 +232,6 @@ def oauth_login(config, force: bool) -> None:
         except ValueError as e:
             print_error(str(e))
             raise typer.Exit(1)
-
-    # Verify state if used
-    if config.OAUTH_STATE and state:
-        # For manual paste, state is in the redirect URL query params
-        # For Playwright capture, state was already in the captured URL
-        # The code extraction already handles this, but if the provider
-        # returns state in the redirect, we should verify it
-        pass  # State verification is provider-dependent; most check server-side
 
     # Exchange code for tokens
     headers, extra_data = build_token_auth_headers(config)

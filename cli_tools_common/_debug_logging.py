@@ -15,3 +15,10 @@ def configure_debug_logger(logger: logging.Logger) -> None:
         logger.setLevel(logging.DEBUG)
         if not logger.handlers:
             logger.addHandler(handler)
+
+
+def get_debug_logger(name: str) -> logging.Logger:
+    """Create and configure a debug logger in one call."""
+    logger = logging.getLogger(name)
+    configure_debug_logger(logger)
+    return logger

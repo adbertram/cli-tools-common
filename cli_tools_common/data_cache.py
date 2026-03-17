@@ -21,21 +21,22 @@ import functools
 from pathlib import Path
 from typing import Any, get_type_hints
 
+import threading
+
 from .config import is_cache_enabled, get_cache_ttl
 
 
-_last_cache_hit: bool = None
+_cache_state = threading.local()
 
 
 def get_cache_hit():
     """Return True/False/None for the last @cached call's hit status."""
-    return _last_cache_hit
+    return getattr(_cache_state, "hit", None)
 
 
 def reset_cache_hit():
     """Reset cache hit state (called after print_json consumes it)."""
-    global _last_cache_hit
-    _last_cache_hit = None
+    _cache_state.hit = None
 
 
 def _make_cache_key(method_name: str, args: tuple, kwargs: dict) -> str:
@@ -124,10 +125,9 @@ def cached(fn):
 
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
-        global _last_cache_hit
 
         if not is_cache_enabled():
-            _last_cache_hit = False
+            _cache_state.hit = False
             return fn(self, *args, **kwargs)
 
         method_name = fn.__name__
@@ -146,11 +146,11 @@ def cached(fn):
                 # Resolve return type for deserialization
                 hints = get_type_hints(fn)
                 return_type = hints.get("return")
-                _last_cache_hit = True
+                _cache_state.hit = True
                 return _deserialize(cached_data["data"], return_type)
 
         # Cache miss — call the real method
-        _last_cache_hit = False
+        _cache_state.hit = False
         result = fn(self, *args, **kwargs)
 
         # Serialize and save

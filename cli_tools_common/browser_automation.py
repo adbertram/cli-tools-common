@@ -21,12 +21,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ._debug_logging import configure_debug_logger
+from ._debug_logging import get_debug_logger
 from .output import print_info, print_success
-from .playwright_service import PlaywrightService, PlaywrightServiceError
+from .browser import PlaywrightService, PlaywrightServiceError
 
-logger = logging.getLogger("cli_tools.browser_automation")
-configure_debug_logger(logger)
+logger = get_debug_logger("cli_tools.browser_automation")
 
 
 class BrowserAutomationError(Exception):
@@ -260,12 +259,30 @@ class BrowserAutomation:
         and navigates to *url* (or ``AUTH_CHECK_URL``).  If the daemon is
         already running, reuses it.  Subsequent calls return the same page;
         if *url* is given it navigates there first.
+
+        If the credential gate already verified auth, a prewarmed browser
+        is stashed on ``self.config._prewarmed_browser``.  This method
+        adopts it to avoid a second Chromium launch.
         """
         logger.debug("get_page: url=%s has_existing_page=%s", url, self._page is not None)
 
         if self._page is not None:
             if url:
                 logger.debug("get_page: reusing existing page, navigating to %s", url)
+                self._page.goto(url)
+            return self._page
+
+        # Check for a prewarmed browser from the credential gate
+        prewarmed = getattr(self.config, '_prewarmed_browser', None)
+        if prewarmed is not None and prewarmed._page is not None:
+            self.config._prewarmed_browser = None  # consume it
+            self._service = prewarmed._service
+            self._page = prewarmed._page
+            self._auth_verified_at = prewarmed._auth_verified_at
+            prewarmed._service = None
+            prewarmed._page = None
+            logger.debug("get_page: adopted prewarmed browser (skipping launch)")
+            if url:
                 self._page.goto(url)
             return self._page
 
@@ -406,14 +423,15 @@ class BrowserAutomation:
 
     # ==================== Overridable Hooks ====================
 
-    def _is_login_page(self, page) -> bool:
-        url = page.url
-        return self._is_login_page_url(url)
+    def _is_login_page(self, url_or_page) -> bool:
+        """Check if a URL matches the login page pattern.
 
-    def _is_login_page_url(self, url: str) -> bool:
+        Accepts either a URL string or a page object with a .url attribute.
+        """
+        url = url_or_page if isinstance(url_or_page, str) else url_or_page.url
         if self.AUTH_URL_PATTERN:
             result = bool(re.search(self.AUTH_URL_PATTERN, url))
-            logger.debug("_is_login_page_url: url=%s pattern=%r match=%s", url, self.AUTH_URL_PATTERN, result)
+            logger.debug("_is_login_page: url=%s pattern=%r match=%s", url, self.AUTH_URL_PATTERN, result)
             return result
         return False
 

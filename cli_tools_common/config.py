@@ -27,7 +27,7 @@ def get_cache_ttl() -> int:
     return int(os.environ.get("CACHE_TTL", str(DEFAULT_CACHE_TTL)))
 
 
-def _read_is_default_profile(env_path: Path) -> Optional[bool]:
+def read_is_default_profile(env_path: Path) -> Optional[bool]:
     """Read IS_DEFAULT_PROFILE from an env file without loading into os.environ.
 
     Returns True if IS_DEFAULT_PROFILE=1, False if =0, None if not found.
@@ -44,7 +44,7 @@ def _read_is_default_profile(env_path: Path) -> Optional[bool]:
     return None
 
 
-def _profile_name_from_path(env_path: Path) -> str:
+def profile_name_from_path(env_path: Path) -> str:
     """Extract profile name from env file path.
 
     .env → 'default', .env.staging → 'staging'
@@ -55,7 +55,7 @@ def _profile_name_from_path(env_path: Path) -> str:
     return name[5:]  # Remove ".env." prefix
 
 
-def _env_path_for_profile(tool_dir: Path, profile_name: str) -> Path:
+def env_path_for_profile(tool_dir: Path, profile_name: str) -> Path:
     """Get env file path for a profile name.
 
     'default' → .env, 'staging' → .env.staging
@@ -80,7 +80,7 @@ def list_env_files(tool_dir: Path) -> list:
     return files
 
 
-def _get_profiles_base_dir(tool_name: str) -> Path:
+def get_profiles_base_dir(tool_name: str) -> Path:
     """Get the platform-appropriate .profiles/ directory for a tool.
 
     Uses user data directories:
@@ -117,7 +117,6 @@ class BaseConfig:
                 )
     """
 
-    CREDENTIAL_TYPE: CredentialType = None  # Deprecated: use CREDENTIAL_TYPES
     CREDENTIAL_TYPES: list = None           # List of CredentialType values (AND)
     DEFAULT_BASE_URL: str = ""
 
@@ -127,7 +126,6 @@ class BaseConfig:
     OAUTH_SCOPES: list = []              # Scope strings
     OAUTH_REDIRECT_URI: str = ""         # Default redirect URI (overridable in .env via REDIRECT_URI)
     OAUTH_PKCE: bool = False             # Enable PKCE (S256)
-    OAUTH_STATE: bool = False            # Generate + verify state parameter
     OAUTH_TOKEN_AUTH: str = "body"       # "basic" | "body" | "none"
     OAUTH_EXTRA_AUTH_PARAMS: dict = {}   # Extra params for auth URL (e.g. audience)
     OAUTH_USE_PLAYWRIGHT: bool = False   # Use Playwright to capture redirect vs manual paste
@@ -145,20 +143,6 @@ class BaseConfig:
     CUSTOM_EPHEMERAL_FIELDS: list = []
     CUSTOM_SENSITIVE_FIELDS: list = []
 
-    @property
-    def _resolved_credential_types(self) -> list:
-        """Resolve credential types with backward compatibility.
-
-        Returns CREDENTIAL_TYPES if set, falls back to [CREDENTIAL_TYPE].
-        """
-        if self.CREDENTIAL_TYPES is not None:
-            return self.CREDENTIAL_TYPES
-        if self.CREDENTIAL_TYPE is not None:
-            return [self.CREDENTIAL_TYPE]
-        raise ConfigError(
-            "Subclass must set CREDENTIAL_TYPES (list) or CREDENTIAL_TYPE (deprecated)."
-        )
-
     def __init__(self, tool_dir: Path, profile: str = None):
         """Initialize config by resolving the profile and loading the env file.
 
@@ -171,6 +155,10 @@ class BaseConfig:
             tool_dir: Root directory of the CLI tool (contains .env files).
             profile: Optional explicit profile name.
         """
+        if self.CREDENTIAL_TYPES is None:
+            raise ConfigError(
+                "Subclass must set CREDENTIAL_TYPES (list of CredentialType values)."
+            )
         self.tool_dir = tool_dir
         self.profile = profile
         self.env_file_path = self._resolve_env_file(profile)
@@ -178,7 +166,7 @@ class BaseConfig:
         if self.env_file_path.exists():
             # Clear standard credential env vars before loading to prevent
             # stale values from a previously loaded profile
-            for field in combined_all_fields(self._resolved_credential_types, config=self):
+            for field in combined_all_fields(self.CREDENTIAL_TYPES, config=self):
                 os.environ.pop(field, None)
             os.environ.pop("IS_DEFAULT_PROFILE", None)
             load_dotenv(self.env_file_path, override=True)
@@ -201,7 +189,7 @@ class BaseConfig:
 
     def _env_file_for_profile(self, name: str) -> Path:
         """Get .env file path for a named profile."""
-        path = _env_path_for_profile(self.tool_dir, name)
+        path = env_path_for_profile(self.tool_dir, name)
         if not path.exists():
             raise ConfigError(
                 f"Profile '{name}' not found. "
@@ -220,14 +208,14 @@ class BaseConfig:
 
         defaults = []
         for f in env_files:
-            if _read_is_default_profile(f) is True:
+            if read_is_default_profile(f) is True:
                 defaults.append(f)
 
         if len(defaults) == 1:
             return defaults[0]
 
         if len(defaults) > 1:
-            names = [_profile_name_from_path(f) for f in defaults]
+            names = [profile_name_from_path(f) for f in defaults]
             raise ConfigError(
                 f"Multiple default profiles found: {', '.join(names)}. "
                 "Only one .env file should have IS_DEFAULT_PROFILE=1."
@@ -322,7 +310,7 @@ class BaseConfig:
         the tool has credentials if non-browser creds are complete OR a saved
         browser session exists.  Single-type tools use simple all-fields check.
         """
-        cred_types = self._resolved_credential_types
+        cred_types = self.CREDENTIAL_TYPES
         if CredentialType.BROWSER_SESSION in cred_types:
             non_browser_types = [ct for ct in cred_types if ct != CredentialType.BROWSER_SESSION]
             non_browser_ok = all(self._get(f) for f in combined_required_fields(non_browser_types, config=self))
@@ -336,7 +324,7 @@ class BaseConfig:
 
     def get_missing_credentials(self) -> list:
         """Get list of missing required credential field names."""
-        return [f for f in combined_required_fields(self._resolved_credential_types, config=self) if not self._get(f)]
+        return [f for f in combined_required_fields(self.CREDENTIAL_TYPES, config=self) if not self._get(f)]
 
     def save_api_key(self, api_key: str):
         """Save API key credential."""
@@ -355,13 +343,13 @@ class BaseConfig:
 
     def clear_credentials(self):
         """Clear all credential fields for this credential type."""
-        for field in combined_all_fields(self._resolved_credential_types, config=self):
+        for field in combined_all_fields(self.CREDENTIAL_TYPES, config=self):
             self._clear(field)
 
     def clear_ephemeral(self):
         """Clear ephemeral fields (tokens) and browser session. Preserves static credentials."""
         from .credentials import combined_ephemeral_fields  # avoid circular at module level
-        for field in combined_ephemeral_fields(self._resolved_credential_types, config=self):
+        for field in combined_ephemeral_fields(self.CREDENTIAL_TYPES, config=self):
             self._clear(field)
         self.clear_session()
 
@@ -388,7 +376,7 @@ class BaseConfig:
         Automatically migrates from the old location (tool_dir/.profiles/)
         on first access if the new location doesn't exist yet.
         """
-        new_dir = _get_profiles_base_dir(self.tool_dir.name)
+        new_dir = get_profiles_base_dir(self.tool_dir.name)
 
         # Migration: move old location to new location if needed
         old_dir = self.tool_dir / ".profiles"
@@ -402,7 +390,7 @@ class BaseConfig:
 
     def get_profile_data_dir(self) -> Path:
         """Get data directory for the active profile."""
-        name = _profile_name_from_path(self.env_file_path)
+        name = profile_name_from_path(self.env_file_path)
         profile_dir = self.get_profiles_dir() / name
         profile_dir.mkdir(parents=True, exist_ok=True)
         return profile_dir
@@ -425,7 +413,6 @@ class BaseConfig:
 
     def clear_session(self):
         """Clear saved session data for the active profile."""
-        import shutil
         profile_dir = self.get_profile_data_dir()
         if profile_dir.exists():
             shutil.rmtree(profile_dir)
@@ -439,7 +426,7 @@ class BaseConfig:
 
     def get_active_profile_name(self) -> str:
         """Get the name of the currently active profile."""
-        return _profile_name_from_path(self.env_file_path)
+        return profile_name_from_path(self.env_file_path)
 
     def test_connection(self) -> Optional[dict]:
         """Test API connectivity. Override in subclass to make a lightweight API call.

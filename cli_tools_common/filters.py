@@ -58,13 +58,7 @@ def apply_filters(data: List[Dict], filter_strings: Optional[List[str]]) -> List
     if not filter_strings or not data:
         return data
 
-    # Validate first (this might be redundant if caller already validated, but safe)
-    try:
-        validate_filters(filter_strings)
-    except FilterValidationError:
-        # If validation fails here, we assume the caller should have handled it or we propagate?
-        # For apply_filters, let's assume valid input or just proceed with best effort parsing
-        pass
+    validate_filters(filter_strings)
 
     filtered_data = []
 
@@ -183,18 +177,18 @@ def _matches_condition(item: Dict, field: str, op: str, value: Optional[str]) ->
         return item_val != typed_filter_val
 
     # Comparison operators
-    try:
-        if op == 'gt':
-            return item_val > typed_filter_val
-        if op == 'gte':
-            return item_val >= typed_filter_val
-        if op == 'lt':
-            return item_val < typed_filter_val
-        if op == 'lte':
-            return item_val <= typed_filter_val
-    except TypeError:
-        # Fallback to string comparison if types don't support ordering
-        return str(item_val) > str(typed_filter_val) if op == 'gt' else False # simplify
+    if op in ('gt', 'gte', 'lt', 'lte'):
+        try:
+            if op == 'gt':
+                return item_val > typed_filter_val
+            if op == 'gte':
+                return item_val >= typed_filter_val
+            if op == 'lt':
+                return item_val < typed_filter_val
+            if op == 'lte':
+                return item_val <= typed_filter_val
+        except TypeError:
+            return False
 
     if op == 'in':
         options = value.split('|')

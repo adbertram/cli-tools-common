@@ -4,10 +4,6 @@ Uses the Playwright Python API directly (playwright.sync_api) to drive
 Chromium.  Persistent sessions are backed by
 ``BrowserType.launch_persistent_context(user_data_dir)`` so that cookies,
 localStorage, and other state survive across runs.
-
-Provides two API layers:
-1. Low-level methods (page_goto, page_eval, browser_open, etc.) returning dicts
-2. Convenience methods (goto, evaluate, locator, etc.) used by BrowserAutomation
 """
 
 import json
@@ -19,32 +15,18 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .._debug_logging import configure_debug_logger
+from .._debug_logging import get_debug_logger
 from . import PlaywrightServiceError, _DAEMON_PROFILES_DIR
 from ._context import _ServiceContext
 from ._elements import _ServiceElement, _ServiceLocator
-logger = logging.getLogger("cli_tools.playwright_service")
-configure_debug_logger(logger)
+logger = get_debug_logger("cli_tools.playwright_service")
 
 
 class PlaywrightService:
-    """Unified browser automation service using the Playwright Python API.
+    """Unified browser automation service using the Playwright Python API."""
 
-    Provides two API layers:
-    1. Low-level methods (page_goto, browser_open, etc.) returning dicts
-       - Used by PlaywrightClient delegation
-    2. Convenience methods (goto, evaluate, locator, etc.)
-       - Used by BrowserAutomation and its subclasses
-    """
-
-    def __init__(
-        self,
-        session: str,
-        binary: str = "playwright-cli",  # kept for backward compat; ignored
-        timeout: int = 60,
-    ):
+    def __init__(self, session: str, timeout: int = 60):
         self.session = session
-        self.binary = binary  # no longer used
         self.default_timeout = timeout
         self._dialog_handler = None
         self._playwright = None
@@ -370,7 +352,6 @@ class PlaywrightService:
                 self._browser_context = None
                 self._page = None
                 self.clear_session_metadata()
-                self._clear_stale_lock(force_kill=False)
                 if not self._clear_stale_lock(force_kill=False):
                     self._clear_stale_lock(force_kill=True)
                 self._clear_stale_socket()
@@ -400,51 +381,6 @@ class PlaywrightService:
             self._playwright = None
         return {"success": True, "message": "Browser closed"}
 
-    def browser_list(self) -> List[Dict[str, Any]]:
-        sessions = []
-        if _DAEMON_PROFILES_DIR.exists():
-            for sf in _DAEMON_PROFILES_DIR.glob("*.session"):
-                name = sf.stem
-                try:
-                    data = json.loads(sf.read_text())
-                except Exception:
-                    data = {}
-                ud = _DAEMON_PROFILES_DIR / f"ud-{name}"
-                sessions.append({
-                    'name': name,
-                    'browser_type': data.get('browser', 'chromium'),
-                    'user_data_dir': str(ud) if ud.exists() else '',
-                    'headed': data.get('headed', False),
-                    'status': 'running' if self._is_browser_running(str(ud)) else 'stopped',
-                })
-        return sessions
-
-    def browser_close_all(self) -> Dict[str, Any]:
-        self.browser_close()
-        return {"success": True, "message": "All sessions closed"}
-
-    def browser_kill_all(self) -> Dict[str, Any]:
-        self.browser_close()
-        return {"success": True, "message": "All sessions killed"}
-
-    def browser_install(self) -> Dict[str, Any]:
-        return {"success": True, "message": "Workspace initialized"}
-
-    def browser_install_browser(self) -> Dict[str, Any]:
-        try:
-            subprocess.run(
-                ["playwright", "install", "chromium"],
-                capture_output=True, text=True, timeout=300,
-            )
-        except Exception as e:
-            raise PlaywrightServiceError(f"Failed to install browser: {e}")
-        return {"success": True, "message": "Browser installed"}
-
-    def browser_resize(self, width: int, height: int) -> Dict[str, Any]:
-        page = self._get_page()
-        page.set_viewport_size({"width": width, "height": height})
-        return self._page_info()
-
     # ==================== Page Methods ====================
 
     def page_goto(self, url: str) -> Dict[str, Any]:
@@ -455,41 +391,10 @@ class PlaywrightService:
             raise PlaywrightServiceError(f"Failed to navigate to {url}: {e}")
         return self._page_info()
 
-    def page_back(self) -> Dict[str, Any]:
-        page = self._get_page()
-        page.go_back(timeout=self.default_timeout * 1000)
-        return self._page_info()
-
-    def page_forward(self) -> Dict[str, Any]:
-        page = self._get_page()
-        page.go_forward(timeout=self.default_timeout * 1000)
-        return self._page_info()
-
     def page_reload(self) -> Dict[str, Any]:
         page = self._get_page()
         page.reload(timeout=self.default_timeout * 1000)
         return self._page_info()
-
-    def page_snapshot(self) -> Dict[str, Any]:
-        page = self._get_page()
-        snapshot_dir = Path(tempfile.gettempdir()) / "playwright-snapshots"
-        snapshot_dir.mkdir(parents=True, exist_ok=True)
-        snapshot_file = snapshot_dir / f"{self.session}-{int(time.time())}.mhtml"
-        try:
-            # Use CDP to get MHTML snapshot
-            client = page.context.new_cdp_session(page)
-            result = client.send("Page.captureSnapshot", {"format": "mhtml"})
-            snapshot_file.write_text(result.get("data", ""))
-            client.detach()
-        except Exception:
-            # Fallback: save HTML content
-            snapshot_file = snapshot_file.with_suffix(".html")
-            snapshot_file.write_text(page.content())
-        return {
-            'file': str(snapshot_file),
-            'page_url': page.url,
-            'page_title': page.title(),
-        }
 
     def page_screenshot(self, ref: Optional[str] = None) -> Dict[str, Any]:
         page = self._get_page()
@@ -502,14 +407,6 @@ class PlaywrightService:
         else:
             page.screenshot(path=str(screenshot_file))
         return {'file': str(screenshot_file), 'page_url': page.url}
-
-    def page_pdf(self) -> Dict[str, Any]:
-        page = self._get_page()
-        pdf_dir = Path(tempfile.gettempdir()) / "playwright-pdfs"
-        pdf_dir.mkdir(parents=True, exist_ok=True)
-        pdf_file = pdf_dir / f"{self.session}-{int(time.time())}.pdf"
-        page.pdf(path=str(pdf_file))
-        return {'file': str(pdf_file), 'page_url': page.url}
 
     def page_eval(self, func: str, ref: Optional[str] = None, timeout: int = None) -> Dict[str, Any]:
         page = self._get_page()
@@ -527,170 +424,11 @@ class PlaywrightService:
             'page_title': page.title(),
         }
 
-    # ==================== Interact Methods ====================
-
-    def interact_click(self, ref: str, button: Optional[str] = None) -> Dict[str, Any]:
-        page = self._get_page()
-        kwargs = {}
-        if button:
-            kwargs["button"] = button
-        page.locator(ref).click(**kwargs)
-        return self._page_info()
-
-    def interact_dblclick(self, ref: str, button: Optional[str] = None) -> Dict[str, Any]:
-        page = self._get_page()
-        kwargs = {}
-        if button:
-            kwargs["button"] = button
-        page.locator(ref).dblclick(**kwargs)
-        return self._page_info()
-
-    def interact_fill(self, ref: str, text: str) -> Dict[str, Any]:
-        page = self._get_page()
-        page.locator(ref).fill(text)
-        return self._page_info()
-
-    def interact_type(self, ref: str, text: str) -> Dict[str, Any]:
-        page = self._get_page()
-        page.keyboard.type(text)
-        return self._page_info()
-
-    def interact_drag(self, start_ref: str, end_ref: str) -> Dict[str, Any]:
-        page = self._get_page()
-        page.locator(start_ref).drag_to(page.locator(end_ref))
-        return self._page_info()
-
-    def interact_hover(self, ref: str) -> Dict[str, Any]:
-        page = self._get_page()
-        page.locator(ref).hover()
-        return self._page_info()
-
-    def interact_select(self, ref: str, value: str) -> Dict[str, Any]:
-        page = self._get_page()
-        page.locator(ref).select_option(value)
-        return self._page_info()
-
-    def interact_upload(self, file: str) -> Dict[str, Any]:
-        page = self._get_page()
-        page.locator('input[type="file"]').set_input_files(file)
-        return self._page_info()
-
-    def interact_check(self, ref: str) -> Dict[str, Any]:
-        page = self._get_page()
-        page.locator(ref).check()
-        return self._page_info()
-
-    def interact_uncheck(self, ref: str) -> Dict[str, Any]:
-        page = self._get_page()
-        page.locator(ref).uncheck()
-        return self._page_info()
-
     # ==================== Keyboard Methods ====================
 
     def keyboard_press(self, key: str) -> Dict[str, Any]:
         page = self._get_page()
         page.keyboard.press(key)
-        return self._page_info()
-
-    def keyboard_keydown(self, key: str) -> Dict[str, Any]:
-        page = self._get_page()
-        page.keyboard.down(key)
-        return self._page_info()
-
-    def keyboard_keyup(self, key: str) -> Dict[str, Any]:
-        page = self._get_page()
-        page.keyboard.up(key)
-        return self._page_info()
-
-    # ==================== Mouse Methods ====================
-
-    def mouse_move(self, x: int, y: int) -> Dict[str, Any]:
-        page = self._get_page()
-        page.mouse.move(x, y)
-        return self._page_info()
-
-    def mouse_down(self, button: Optional[str] = None) -> Dict[str, Any]:
-        page = self._get_page()
-        kwargs = {}
-        if button:
-            kwargs["button"] = button
-        page.mouse.down(**kwargs)
-        return self._page_info()
-
-    def mouse_up(self, button: Optional[str] = None) -> Dict[str, Any]:
-        page = self._get_page()
-        kwargs = {}
-        if button:
-            kwargs["button"] = button
-        page.mouse.up(**kwargs)
-        return self._page_info()
-
-    def mouse_wheel(self, dx: int, dy: int) -> Dict[str, Any]:
-        page = self._get_page()
-        page.mouse.wheel(dx, dy)
-        return self._page_info()
-
-    # ==================== Dialog Methods ====================
-
-    def dialog_accept(self, prompt_text: Optional[str] = None) -> Dict[str, Any]:
-        page = self._get_page()
-        page.on("dialog", lambda d: d.accept(prompt_text) if prompt_text else d.accept())
-        return {"success": True, "message": "Dialog accepted"}
-
-    def dialog_dismiss(self) -> Dict[str, Any]:
-        page = self._get_page()
-        page.on("dialog", lambda d: d.dismiss())
-        return {"success": True, "message": "Dialog dismissed"}
-
-    # ==================== Tab Methods ====================
-
-    def tab_list(self) -> List[Dict[str, Any]]:
-        if self._browser_context is None:
-            return []
-        tabs = []
-        for i, page in enumerate(self._browser_context.pages):
-            tab = {'index': i, 'url': page.url}
-            try:
-                tab['title'] = page.title()
-            except Exception:
-                pass
-            tabs.append(tab)
-        return tabs
-
-    def tab_new(self, url: Optional[str] = None) -> Dict[str, Any]:
-        if self._browser_context is None:
-            raise PlaywrightServiceError("No browser open")
-        page = self._browser_context.new_page()
-        if url:
-            page.goto(url, timeout=self.default_timeout * 1000)
-        self._page = page
-        return self._page_info()
-
-    def tab_close(self, index: Optional[int] = None) -> Dict[str, Any]:
-        if self._browser_context is None:
-            return {"success": True, "message": "Tab closed"}
-        pages = self._browser_context.pages
-        if index is not None and 0 <= index < len(pages):
-            pages[index].close()
-        elif self._page is not None:
-            self._page.close()
-        # Switch to last remaining page
-        pages = self._browser_context.pages
-        if pages:
-            self._page = pages[-1]
-        else:
-            self._page = None
-        return {"success": True, "message": "Tab closed"}
-
-    def tab_select(self, index: int) -> Dict[str, Any]:
-        if self._browser_context is None:
-            raise PlaywrightServiceError("No browser open")
-        pages = self._browser_context.pages
-        if 0 <= index < len(pages):
-            self._page = pages[index]
-            self._page.bring_to_front()
-        else:
-            raise PlaywrightServiceError(f"Tab index {index} out of range (0-{len(pages)-1})")
         return self._page_info()
 
     # ==================== Cookie Methods ====================
@@ -702,13 +440,6 @@ class PlaywrightService:
             return self._browser_context.cookies()
         except Exception:
             return []
-
-    def cookie_get(self, name: str) -> Dict[str, Any]:
-        cookies = self.cookie_list()
-        for c in cookies:
-            if c.get('name') == name:
-                return c
-        return {'name': name, 'value': ''}
 
     def cookie_set(self, name: str, value: str) -> Dict[str, Any]:
         if self._browser_context is None:
@@ -728,23 +459,7 @@ class PlaywrightService:
         }])
         return {"success": True, "message": f"Cookie '{name}' set"}
 
-    def cookie_delete(self, name: str) -> Dict[str, Any]:
-        if self._browser_context is None:
-            return {"success": True, "message": f"Cookie '{name}' deleted"}
-        # Playwright doesn't have delete-single-cookie, so clear and re-add others
-        cookies = self._browser_context.cookies()
-        remaining = [c for c in cookies if c.get('name') != name]
-        self._browser_context.clear_cookies()
-        if remaining:
-            self._browser_context.add_cookies(remaining)
-        return {"success": True, "message": f"Cookie '{name}' deleted"}
-
-    def cookie_clear(self) -> Dict[str, Any]:
-        if self._browser_context is not None:
-            self._browser_context.clear_cookies()
-        return {"success": True, "message": "All cookies cleared"}
-
-    # ==================== Storage Methods (shared) ====================
+    # ==================== Storage Methods ====================
 
     def _storage_list(self, prefix: str) -> List[Dict[str, str]]:
         page = self._get_page()
@@ -762,66 +477,8 @@ class PlaywrightService:
         except Exception:
             return []
 
-    def _storage_get(self, prefix: str, key: str) -> Dict[str, str]:
-        page = self._get_page()
-        storage_type = "localStorage" if prefix == "localstorage" else "sessionStorage"
-        try:
-            value = page.evaluate(f"{storage_type}.getItem({json.dumps(key)})")
-            return {'key': key, 'value': value or ''}
-        except Exception:
-            return {'key': key, 'value': ''}
-
-    def _storage_set(self, prefix: str, display: str, key: str, value: str) -> Dict[str, Any]:
-        page = self._get_page()
-        storage_type = "localStorage" if prefix == "localstorage" else "sessionStorage"
-        page.evaluate(f"{storage_type}.setItem({json.dumps(key)}, {json.dumps(value)})")
-        return {"success": True, "message": f"{display} '{key}' set"}
-
-    def _storage_delete(self, prefix: str, display: str, key: str) -> Dict[str, Any]:
-        page = self._get_page()
-        storage_type = "localStorage" if prefix == "localstorage" else "sessionStorage"
-        page.evaluate(f"{storage_type}.removeItem({json.dumps(key)})")
-        return {"success": True, "message": f"{display} '{key}' deleted"}
-
-    def _storage_clear(self, prefix: str, display: str) -> Dict[str, Any]:
-        page = self._get_page()
-        storage_type = "localStorage" if prefix == "localstorage" else "sessionStorage"
-        page.evaluate(f"{storage_type}.clear()")
-        return {"success": True, "message": f"{display} cleared"}
-
-    # ==================== LocalStorage Methods ====================
-
     def localstorage_list(self) -> List[Dict[str, str]]:
         return self._storage_list("localstorage")
-
-    def localstorage_get(self, key: str) -> Dict[str, str]:
-        return self._storage_get("localstorage", key)
-
-    def localstorage_set(self, key: str, value: str) -> Dict[str, Any]:
-        return self._storage_set("localstorage", "localStorage", key, value)
-
-    def localstorage_delete(self, key: str) -> Dict[str, Any]:
-        return self._storage_delete("localstorage", "localStorage", key)
-
-    def localstorage_clear(self) -> Dict[str, Any]:
-        return self._storage_clear("localstorage", "localStorage")
-
-    # ==================== SessionStorage Methods ====================
-
-    def sessionstorage_list(self) -> List[Dict[str, str]]:
-        return self._storage_list("sessionstorage")
-
-    def sessionstorage_get(self, key: str) -> Dict[str, str]:
-        return self._storage_get("sessionstorage", key)
-
-    def sessionstorage_set(self, key: str, value: str) -> Dict[str, Any]:
-        return self._storage_set("sessionstorage", "sessionStorage", key, value)
-
-    def sessionstorage_delete(self, key: str) -> Dict[str, Any]:
-        return self._storage_delete("sessionstorage", "sessionStorage", key)
-
-    def sessionstorage_clear(self) -> Dict[str, Any]:
-        return self._storage_clear("sessionstorage", "sessionStorage")
 
     # ==================== State Methods ====================
 
@@ -881,63 +538,6 @@ class PlaywrightService:
             raise PlaywrightServiceError(f"Failed to save state: {e}")
 
         return {"success": True, "file": filename}
-
-    # ==================== Network Methods ====================
-
-    def network_requests(self) -> List[Dict[str, Any]]:
-        # Network request tracking would require setting up route handlers
-        # Return empty list as baseline
-        return []
-
-    def network_route(self, pattern: str) -> Dict[str, Any]:
-        page = self._get_page()
-        page.route(pattern, lambda route: route.continue_())
-        return {"success": True, "message": f"Route added: {pattern}"}
-
-    def network_route_list(self) -> List[Dict[str, str]]:
-        return []
-
-    def network_unroute(self, pattern: Optional[str] = None) -> Dict[str, Any]:
-        page = self._get_page()
-        if pattern:
-            page.unroute(pattern)
-        return {"success": True, "message": "Routes removed"}
-
-    # ==================== DevTools Methods ====================
-
-    def devtools_console(self, min_level: Optional[str] = None) -> List[Dict[str, Any]]:
-        return []
-
-    def devtools_run_code(self, code: str) -> Dict[str, Any]:
-        page = self._get_page()
-        try:
-            result = page.evaluate(code)
-        except Exception as e:
-            raise PlaywrightServiceError(f"Code execution failed: {e}")
-        return {
-            'result': result,
-            'page_url': page.url,
-            'page_title': page.title(),
-        }
-
-    def devtools_tracing_start(self) -> Dict[str, Any]:
-        if self._browser_context is not None:
-            self._browser_context.tracing.start(screenshots=True, snapshots=True)
-        return {"success": True, "message": "Tracing started"}
-
-    def devtools_tracing_stop(self) -> Dict[str, Any]:
-        if self._browser_context is not None:
-            trace_dir = Path(tempfile.gettempdir()) / "playwright-traces"
-            trace_dir.mkdir(parents=True, exist_ok=True)
-            trace_file = trace_dir / f"{self.session}-{int(time.time())}.zip"
-            self._browser_context.tracing.stop(path=str(trace_file))
-        return {"success": True, "message": "Tracing stopped"}
-
-    def devtools_video_start(self) -> Dict[str, Any]:
-        return {"success": True, "message": "Video recording started"}
-
-    def devtools_video_stop(self) -> Dict[str, Any]:
-        return {"success": True, "message": "Video recording stopped"}
 
     # ==================== Data Methods ====================
 
@@ -1069,10 +669,6 @@ class PlaywrightService:
 
     def select_option(self, selector: str, *, label: str = None, value: str = None) -> None:
         self.locator(selector).select_option(value, label=label)
-
-    def press(self, key: str) -> None:
-        """Press a key (no return value)."""
-        self.keyboard_press(key)
 
     # --- Waiting ---
 

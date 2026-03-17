@@ -51,7 +51,7 @@ class AuthVerifier:
         This prevents false positives where OAuth is valid but browser
         session is expired (which would cause browser operations to fail).
         """
-        cred_types = self.config._resolved_credential_types
+        cred_types = self.config.CREDENTIAL_TYPES
         result = {"credentials_saved": self.config.has_credentials()}
 
         cred_set = frozenset(cred_types)
@@ -93,23 +93,12 @@ class AuthVerifier:
         # pathways must be live), because browser operations will fail if
         # the browser session is expired even when OAuth/API keys are valid.
         is_dual_auth = has_browser and (has_oauth or has_api)
-
-        if is_dual_auth:
-            # AND: all credential pathways must be live
-            all_ok = True
-            if non_browser_ok is not None and not non_browser_ok:
-                all_ok = False
-            if browser_ok_result is not None and not browser_ok_result:
-                all_ok = False
-            result["authenticated"] = all_ok
-        else:
-            # Single-type: all checks must pass (original AND behavior)
-            all_ok = result["credentials_saved"]
-            if non_browser_ok is not None and not non_browser_ok:
-                all_ok = False
-            if browser_ok_result is not None and not browser_ok_result:
-                all_ok = False
-            result["authenticated"] = all_ok
+        all_ok = True if is_dual_auth else result["credentials_saved"]
+        if non_browser_ok is not None and not non_browser_ok:
+            all_ok = False
+        if browser_ok_result is not None and not browser_ok_result:
+            all_ok = False
+        result["authenticated"] = all_ok
 
         return result
 

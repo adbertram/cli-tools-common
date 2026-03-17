@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cli_tools_common.auth_verifier import AuthVerifier
+from cli_tools_common.browser_automation import AuthResult
 from cli_tools_common.credentials import CredentialType
 
 
@@ -26,7 +27,7 @@ def _make_config(cred_types, has_creds=True, browser=None, access_token=None):
     from cli_tools_common.config import BaseConfig
 
     config = MagicMock(spec=BaseConfig)
-    config._resolved_credential_types = cred_types
+    config.CREDENTIAL_TYPES = cred_types
     config.has_credentials.return_value = has_creds
     config.get_browser.return_value = browser
     config.access_token = access_token
@@ -75,7 +76,7 @@ class TestVerifyOutputFields:
     def test_browser_session_includes_browser_session_field(self):
         """Browser CLIs must get a 'browser_session' field in verify() output."""
         browser = MagicMock()
-        browser.is_authenticated.return_value = True
+        browser.is_authenticated.return_value = AuthResult(authenticated=True, live_check=True)
         browser.close.return_value = None
 
         config = _make_config(
@@ -93,7 +94,7 @@ class TestVerifyOutputFields:
 
     def test_browser_session_false_when_not_authenticated(self):
         browser = MagicMock()
-        browser.is_authenticated.return_value = False
+        browser.is_authenticated.return_value = AuthResult(authenticated=False, live_check=True)
         browser.close.return_value = None
 
         config = _make_config(
@@ -174,9 +175,11 @@ class TestCredentialTypeConstants:
     """Verify that AuthVerifier type constants cover all CredentialTypes."""
 
     def test_all_types_covered(self):
-        """Every CredentialType must be in exactly one of the type sets."""
+        """Every CredentialType (except NO_AUTH) must be in exactly one of the type sets."""
         all_covered = AuthVerifier.OAUTH_TYPES | AuthVerifier.BROWSER_TYPES | AuthVerifier.API_TYPES
         for ct in CredentialType:
+            if ct == CredentialType.NO_AUTH:
+                continue
             assert ct in all_covered, (
                 f"CredentialType.{ct.name} not covered by any AuthVerifier type constant"
             )

@@ -5,6 +5,7 @@ with configurable concurrency and error handling.
 """
 import json
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -94,6 +95,7 @@ class BulkProcessor:
         failed = 0
         results = []
         errors = []
+        lock = threading.Lock()
         start_time = time.time()
 
         def _process_item(item_index):
@@ -105,24 +107,26 @@ class BulkProcessor:
 
             try:
                 result = operation(item, index)
-                succeeded += 1
-                completed += 1
-                if self.show_progress:
-                    print(
-                        f"\rProcessing: {completed}/{total} ({succeeded} ok, {failed} failed)",
-                        end="",
-                        file=sys.stderr,
-                    )
+                with lock:
+                    succeeded += 1
+                    completed += 1
+                    if self.show_progress:
+                        print(
+                            f"\rProcessing: {completed}/{total} ({succeeded} ok, {failed} failed)",
+                            end="",
+                            file=sys.stderr,
+                        )
                 return {"success": True, "input": item, "result": result}
             except Exception as e:
-                failed += 1
-                completed += 1
-                if self.show_progress:
-                    print(
-                        f"\rProcessing: {completed}/{total} ({succeeded} ok, {failed} failed)",
-                        end="",
-                        file=sys.stderr,
-                    )
+                with lock:
+                    failed += 1
+                    completed += 1
+                    if self.show_progress:
+                        print(
+                            f"\rProcessing: {completed}/{total} ({succeeded} ok, {failed} failed)",
+                            end="",
+                            file=sys.stderr,
+                        )
                 if not self.continue_on_error:
                     raise
                 return {"success": False, "input": item, "error": str(e)}

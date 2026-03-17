@@ -6,6 +6,11 @@ class ClientError(Exception):
     pass
 
 
+class CredentialError(ClientError):
+    """Exception for missing or invalid credentials."""
+    pass
+
+
 class ConfigError(Exception):
     """Exception for configuration and profile errors."""
     pass

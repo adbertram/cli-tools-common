@@ -4,13 +4,12 @@ import logging
 import typer
 from typing import Callable, Optional
 
-from ._debug_logging import configure_debug_logger
+from ._debug_logging import get_debug_logger
 from .auth_verifier import AuthVerifier
 from .credentials import CredentialType, mask_value, combined_login_prompts, combined_required_fields
-from .output import print_json, print_table, print_success, print_error, print_info, handle_error
+from .output import print_json, print_table, print_output, print_success, print_error, print_info, handle_error, command
 
-logger = logging.getLogger("cli_tools.auth_commands")
-configure_debug_logger(logger)
+logger = get_debug_logger("cli_tools.auth_commands")
 
 
 def _prompt_and_save(config, prompts, skip_if_set: bool = True) -> bool:
@@ -72,7 +71,7 @@ def _handle_browser_login(config, tool_name: str, force: bool):
 
 def _resolve_credential_type(config, credential_type_str: str):
     """Resolve a credential type string to a CredentialType enum, validating it's configured."""
-    cred_types = config._resolved_credential_types
+    cred_types = config.CREDENTIAL_TYPES
     if len(cred_types) < 2:
         print_error("--credential-type is only valid for CLIs with multiple credential types")
         raise typer.Exit(1)
@@ -119,6 +118,7 @@ def create_auth_app(
     app = typer.Typer(help=f"Manage {tool_name} authentication", no_args_is_help=True)
 
     @app.command("login")
+    @command
     def auth_login(
         profile: Optional[str] = typer.Option(
             None, "--profile", "-p", help="Profile name to save credentials to"
@@ -136,92 +136,85 @@ def create_auth_app(
         Prompts for required credentials based on the tool's authentication type.
         For OAuth authorization code flows, opens a browser for user consent.
         """
-        try:
-            config = get_config_fn(profile=profile)
+        config = get_config_fn(profile=profile)
 
-            # Resolve scoped credential type if specified
-            resolved_type = None
-            if credential_type:
-                resolved_type = _resolve_credential_type(config, credential_type)
+        # Resolve scoped credential type if specified
+        resolved_type = None
+        if credential_type:
+            resolved_type = _resolve_credential_type(config, credential_type)
 
-            # Determine which credential types to process
-            active_types = [resolved_type] if resolved_type else config._resolved_credential_types
+        # Determine which credential types to process
+        active_types = [resolved_type] if resolved_type else config.CREDENTIAL_TYPES
 
-            # Resolve effective handler (3-way)
-            effective_handler = login_handler
-            if effective_handler is None and config.OAUTH_AUTH_URL and config.OAUTH_TOKEN_URL:
-                from .oauth import oauth_login
-                effective_handler = oauth_login
+        # Resolve effective handler (3-way)
+        effective_handler = login_handler
+        if effective_handler is None and config.OAUTH_AUTH_URL and config.OAUTH_TOKEN_URL:
+            from .oauth import oauth_login
+            effective_handler = oauth_login
 
-            # Force clears ephemeral state (tokens + browser session), not static creds
-            if force:
-                if resolved_type:
-                    config.clear_ephemeral_for_type(resolved_type)
-                else:
-                    config.clear_ephemeral()
-                print_info("Existing sessions cleared")
-
-            # Browser session only — skip all prompts, go directly to browser login
-            if resolved_type == CredentialType.BROWSER_SESSION:
-                _handle_browser_login(config, tool_name, force)
-                return
-
-            if effective_handler is not None:
-                # Custom or built-in OAuth login flow
-                # Ensure setup fields (CLIENT_ID, etc.) are configured first
-                _prompt_and_save(config, combined_login_prompts(active_types, config=config))
-                _prompt_and_save(config, config.AUTH_EXTRA_PROMPTS, skip_if_set=not force)
-
-                # Delegate to handler for token acquisition
-                effective_handler(config, force)
+        # Force clears ephemeral state (tokens + browser session), not static creds
+        if force:
+            if resolved_type:
+                config.clear_ephemeral_for_type(resolved_type)
             else:
-                # Default prompt-based login — skip fields that already have values
-                # (force only clears ephemeral fields, so static creds remain)
-                prompted = _prompt_and_save(config, combined_login_prompts(active_types, config=config))
-                _prompt_and_save(config, config.AUTH_EXTRA_PROMPTS, skip_if_set=not force)
+                config.clear_ephemeral()
+            print_info("Existing sessions cleared")
 
-                if prompted:
-                    print_success("Credentials saved successfully")
+        # Browser session only — skip all prompts, go directly to browser login
+        if resolved_type == CredentialType.BROWSER_SESSION:
+            _handle_browser_login(config, tool_name, force)
+            return
 
-            # Browser session login (if configured and no custom handler)
-            # Custom handlers manage their own browser flow
-            # Skip if --credential-type is set and it's not BROWSER_SESSION
-            if effective_handler is None or effective_handler is not login_handler:
-                if not resolved_type or resolved_type == CredentialType.BROWSER_SESSION:
-                    _handle_browser_login(config, tool_name, force)
+        if effective_handler is not None:
+            # Custom or built-in OAuth login flow
+            # Ensure setup fields (CLIENT_ID, etc.) are configured first
+            _prompt_and_save(config, combined_login_prompts(active_types, config=config))
+            _prompt_and_save(config, config.AUTH_EXTRA_PROMPTS, skip_if_set=not force)
 
-        except typer.Exit:
-            raise
-        except Exception as e:
-            raise typer.Exit(handle_error(e))
+            # Delegate to handler for token acquisition
+            effective_handler(config, force)
+        else:
+            # Default prompt-based login — skip fields that already have values
+            # (force only clears ephemeral fields, so static creds remain)
+            prompted = _prompt_and_save(config, combined_login_prompts(active_types, config=config))
+            _prompt_and_save(config, config.AUTH_EXTRA_PROMPTS, skip_if_set=not force)
+
+            if prompted:
+                print_success("Credentials saved successfully")
+
+        # Browser session login (if configured and no custom handler)
+        # Custom handlers manage their own browser flow
+        # Skip if --credential-type is set and it's not BROWSER_SESSION
+        if effective_handler is None or effective_handler is not login_handler:
+            if not resolved_type or resolved_type == CredentialType.BROWSER_SESSION:
+                _handle_browser_login(config, tool_name, force)
 
     @app.command("logout")
+    @command
     def auth_logout(
         profile: Optional[str] = typer.Option(
             None, "--profile", "-p", help="Profile name to clear credentials from"
         ),
     ):
         """Clear stored credentials and browser sessions."""
-        try:
-            config = get_config_fn(profile=profile)
-            config.clear_credentials()
-            # Also clear browser session (Playwright daemon + session data)
-            browser = config.get_browser()
-            if browser is not None:
+        config = get_config_fn(profile=profile)
+        config.clear_credentials()
+        # Also clear browser session (Playwright daemon + session data)
+        browser = config.get_browser()
+        if browser is not None:
+            try:
+                browser.clear_session()
+            except Exception:
+                pass
+            finally:
                 try:
-                    browser.clear_session()
+                    browser.close()
                 except Exception:
                     pass
-                finally:
-                    try:
-                        browser.close()
-                    except Exception:
-                        pass
-            print_success("Credentials cleared")
-        except Exception as e:
-            raise typer.Exit(handle_error(e))
+        print_success("Credentials cleared")
 
     @app.command("status")
+    @command
     def auth_status(
         profile: Optional[str] = typer.Option(
             None, "--profile", "-p", help="Profile name to check"
@@ -231,54 +224,44 @@ def create_auth_app(
         ),
     ):
         """Check authentication status."""
-        try:
-            config = get_config_fn(profile=profile)
-            logger.debug("auth_status: profile=%s has_credentials=%s",
-                         config.get_active_profile_name(), config.has_credentials())
+        config = get_config_fn(profile=profile)
+        logger.debug("auth_status: profile=%s has_credentials=%s",
+                     config.get_active_profile_name(), config.has_credentials())
 
-            # Live verification
-            verifier = AuthVerifier(config)
-            auth_result = verifier.verify()
+        # Live verification
+        verifier = AuthVerifier(config)
+        auth_result = verifier.verify()
 
-            status_data = {
-                "authenticated": auth_result["authenticated"],
-                "credentials_saved": auth_result["credentials_saved"],
-                "profile": config.get_active_profile_name(),
-                "base_url": config.base_url,
-            }
+        status_data = {
+            "authenticated": auth_result["authenticated"],
+            "credentials_saved": auth_result["credentials_saved"],
+            "profile": config.get_active_profile_name(),
+            "base_url": config.base_url,
+        }
 
-            # Masked credential fields (only if creds exist)
-            if auth_result["credentials_saved"]:
-                for field in combined_required_fields(config._resolved_credential_types, config=config):
-                    value = config._get(field)
-                    if value:
-                        status_data[field.lower()] = mask_value(value)
+        # Masked credential fields (only if creds exist)
+        if auth_result["credentials_saved"]:
+            for field in combined_required_fields(config.CREDENTIAL_TYPES, config=config):
+                value = config._get(field)
+                if value:
+                    status_data[field.lower()] = mask_value(value)
 
-            # Conditional fields from verification
-            for key in ("oauth_status", "api_test", "browser_session", "browser_available"):
-                if key in auth_result:
-                    status_data[key] = auth_result[key]
+        # Conditional fields from verification
+        for key in ("oauth_status", "api_test", "browser_session", "browser_available"):
+            if key in auth_result:
+                status_data[key] = auth_result[key]
 
-            if not auth_result["credentials_saved"]:
-                status_data["missing"] = config.get_missing_credentials()
-                status_data["message"] = f"Not authenticated. Run '{tool_name} auth login' to configure."
+        if not auth_result["credentials_saved"]:
+            status_data["missing"] = config.get_missing_credentials()
+            status_data["message"] = f"Not authenticated. Run '{tool_name} auth login' to configure."
 
-            logger.debug("auth_status: final status_data=%s", status_data)
-            if table:
-                cols = list(status_data.keys())
-                hdrs = [c.replace("_", " ").title() for c in cols]
-                print_table([status_data], cols, hdrs)
-            else:
-                print_json(status_data)
-
-        except typer.Exit:
-            raise
-        except Exception as e:
-            raise typer.Exit(handle_error(e))
+        logger.debug("auth_status: final status_data=%s", status_data)
+        print_output(status_data, table)
 
     # Add refresh command only if config has OAuth token URL
     # We check lazily via a probe config to avoid requiring profile at import time
     @app.command("refresh")
+    @command
     def auth_refresh(
         profile: Optional[str] = typer.Option(
             None, "--profile", "-p", help="Profile name"
@@ -288,19 +271,14 @@ def create_auth_app(
         ),
     ):
         """Refresh OAuth access token using stored refresh token."""
-        try:
-            config = get_config_fn(profile=profile)
-            if not config.OAUTH_TOKEN_URL:
-                print_error("Token refresh not supported (no OAUTH_TOKEN_URL configured)")
-                raise typer.Exit(1)
-            from .token_manager import TokenManager
-            tm = TokenManager(config)
-            tm.force_refresh()
-            print_success("Access token refreshed")
-        except typer.Exit:
-            raise
-        except Exception as e:
-            raise typer.Exit(handle_error(e))
+        config = get_config_fn(profile=profile)
+        if not config.OAUTH_TOKEN_URL:
+            print_error("Token refresh not supported (no OAUTH_TOKEN_URL configured)")
+            raise typer.Exit(1)
+        from .token_manager import TokenManager
+        tm = TokenManager(config)
+        tm.force_refresh()
+        print_success("Access token refreshed")
 
     # Auto-detect test_connection on config if no explicit test_handler
     effective_test_handler = test_handler
@@ -322,31 +300,22 @@ def create_auth_app(
     # Add test command if test_handler is provided or auto-detected
     if effective_test_handler is not None:
         @app.command("test")
+        @command
         def auth_test(
             table: bool = typer.Option(False, "--table", "-t", help="Display as table"),
             verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed checks"),
             profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile name"),
         ):
             """Test authentication by verifying credentials work."""
-            try:
-                config = get_config_fn(profile=profile)
+            config = get_config_fn(profile=profile)
 
-                verifier = AuthVerifier(config, api_test_handler=effective_test_handler)
-                result = verifier.verify()
+            verifier = AuthVerifier(config, api_test_handler=effective_test_handler)
+            result = verifier.verify()
 
-                if verbose:
-                    result["profile"] = config.get_active_profile_name()
-                    result["base_url"] = config.base_url
+            if verbose:
+                result["profile"] = config.get_active_profile_name()
+                result["base_url"] = config.base_url
 
-                if table:
-                    cols = list(result.keys())
-                    hdrs = [c.replace("_", " ").title() for c in cols]
-                    print_table([result], cols, hdrs)
-                else:
-                    print_json(result)
-            except typer.Exit:
-                raise
-            except Exception as e:
-                raise typer.Exit(handle_error(e))
+            print_output(result, table)
 
     return app

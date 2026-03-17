@@ -26,42 +26,25 @@ def create_app(
     """
     app = typer.Typer(name=name, help=help, add_completion=True)
 
-    if cache_support:
-
-        @app.callback(invoke_without_command=True)
-        def _callback(
-            ctx: typer.Context,
-            version_flag: Optional[bool] = typer.Option(
-                None, "--version", "-v", help="Show version and exit", is_eager=True,
-            ),
-            no_cache: bool = typer.Option(
-                False, "--no-cache", help="Bypass response cache",
-            ),
-        ):
-            if no_cache:
-                os.environ["CACHE_ENABLED"] = "false"
-            if version_flag:
-                typer.echo(f"{name}-cli version {version}")
-                raise typer.Exit()
-            if ctx.invoked_subcommand is None:
-                typer.echo(ctx.get_help())
-                raise typer.Exit()
-
-    else:
-
-        @app.callback(invoke_without_command=True)
-        def _callback(  # noqa: F811
-            ctx: typer.Context,
-            version_flag: Optional[bool] = typer.Option(
-                None, "--version", "-v", help="Show version and exit", is_eager=True,
-            ),
-        ):
-            if version_flag:
-                typer.echo(f"{name}-cli version {version}")
-                raise typer.Exit()
-            if ctx.invoked_subcommand is None:
-                typer.echo(ctx.get_help())
-                raise typer.Exit()
+    @app.callback(invoke_without_command=True)
+    def _callback(
+        ctx: typer.Context,
+        version_flag: Optional[bool] = typer.Option(
+            None, "--version", "-v", help="Show version and exit", is_eager=True,
+        ),
+        no_cache: bool = typer.Option(
+            False, "--no-cache", help="Bypass response cache",
+            hidden=not cache_support,
+        ),
+    ):
+        if no_cache and cache_support:
+            os.environ["CACHE_ENABLED"] = "false"
+        if version_flag:
+            typer.echo(f"{name}-cli version {version}")
+            raise typer.Exit()
+        if ctx.invoked_subcommand is None:
+            typer.echo(ctx.get_help())
+            raise typer.Exit()
 
     return app
 

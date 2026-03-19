@@ -72,10 +72,16 @@ class AuthVerifier:
 
         # 2. API connectivity test
         if has_api and result["credentials_saved"]:
-            api_status = self._check_api()
-            if api_status is not None:
-                result["api_test"] = api_status
-                api_passed = api_status == "passed"
+            api_result = self._check_api()
+            if api_result is not None:
+                # api_result is a dict with "api_test" plus optional extra fields
+                api_test_val = api_result.get("api_test", "skipped")
+                result["api_test"] = api_test_val
+                # Merge extra fields (e.g., "email") into result
+                for k, v in api_result.items():
+                    if k != "api_test":
+                        result[k] = v
+                api_passed = api_test_val == "passed"
                 if non_browser_ok is None:
                     non_browser_ok = api_passed
                 else:
@@ -116,15 +122,24 @@ class AuthVerifier:
         except Exception:
             return "expired"
 
-    def _check_api(self) -> Optional[str]:
-        """Test API connectivity via handler or config.test_connection()."""
+    def _check_api(self) -> Optional[dict]:
+        """Test API connectivity via handler or config.test_connection().
+
+        Returns:
+            dict with at minimum {"api_test": "passed"|"failed: ..."|"skipped"},
+            plus any extra fields returned by the handler (e.g., "email"),
+            or None if no test is implemented.
+        """
         # Custom handler takes priority (used by auth_test)
         if self._api_test_handler:
             try:
                 api_result = self._api_test_handler(self.config)
-                return api_result.get("api_test", "skipped")
+                if not isinstance(api_result, dict):
+                    return {"api_test": "skipped"}
+                api_result.setdefault("api_test", "skipped")
+                return api_result
             except Exception as e:
-                return f"failed: {e}"
+                return {"api_test": f"failed: {e}"}
 
         # Auto-detect test_connection override
         from .config import BaseConfig
@@ -134,9 +149,12 @@ class AuthVerifier:
             r = self.config.test_connection()
             if r is None:
                 return None
-            return r.get("api_test", "skipped")
+            if not isinstance(r, dict):
+                return {"api_test": "skipped"}
+            r.setdefault("api_test", "skipped")
+            return r
         except Exception as e:
-            return f"failed: {e}"
+            return {"api_test": f"failed: {e}"}
 
     def _check_browser(self) -> Optional[dict]:
         """Check browser session via live headless check.

@@ -1,9 +1,33 @@
 """App factory: standardised Typer app creation with global flags."""
 
 import os
+import sys
 from typing import Optional
 
 import typer
+
+
+def _ensure_utf8_streams() -> None:
+    """Reconfigure stdout/stderr to UTF-8 on Windows.
+
+    On Windows, Python defaults to the console's legacy encoding (e.g. cp1252)
+    for stdout/stderr. This causes UnicodeEncodeError when outputting characters
+    outside that encoding (e.g. U+200B zero-width space).  Reconfiguring to
+    UTF-8 matches the behaviour of ``PYTHONIOENCODING=utf-8`` and is safe on
+    all platforms.
+    """
+    if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+        try:
+            if (sys.stdout.encoding or "").lower().replace("-", "") != "utf8":
+                sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+    if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+        try:
+            if (sys.stderr.encoding or "").lower().replace("-", "") != "utf8":
+                sys.stderr.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
 
 
 def create_app(
@@ -58,6 +82,8 @@ def run_app(app: typer.Typer, *, error_types=None) -> None:
             errors (printed to stderr, exit 2).  Defaults to
             :class:`cli_tools_common.exceptions.ClientError`.
     """
+    _ensure_utf8_streams()
+
     if error_types is None:
         from .exceptions import ClientError
         error_types = (ClientError,)

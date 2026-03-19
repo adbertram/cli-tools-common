@@ -39,6 +39,7 @@ from .output import (
     print_success,
     print_info,
     handle_error,
+    safe_symbol,
 )
 
 
@@ -107,4 +108,5 @@ __all__ = [
     "print_success",
     "print_info",
     "handle_error",
+    "safe_symbol",
 ]

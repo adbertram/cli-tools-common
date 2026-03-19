@@ -8,6 +8,7 @@ This separation enables clean piping: `<tool> list | jq '.field'`
 """
 
 import json
+import os
 import sys
 from typing import Any, Dict, List, Optional, Sequence, Union
 
@@ -22,12 +23,38 @@ from .exceptions import ClientError, CredentialError
 console = Console()
 
 
+def _supports_unicode() -> bool:
+    """Check if the current stdout encoding supports common Unicode symbols.
+
+    Returns False on Windows when the console uses a legacy encoding (e.g.
+    cp1252) that cannot represent characters like U+2713 (checkmark).
+    """
+    if os.name != "nt":
+        return True
+    encoding = getattr(sys.stdout, "encoding", None) or ""
+    return encoding.lower().replace("-", "") in ("utf8", "utf16")
+
+
+# ASCII-safe symbol alternatives for environments that lack Unicode support.
+_SYMBOLS_UNICODE = {"check": "\u2713", "cross": "\u2717", "warning": "\u26a0", "circle": "\u25cb"}
+_SYMBOLS_ASCII = {"check": "Yes", "cross": "No", "warning": "(!)", "circle": "-"}
+
+
+def safe_symbol(name: str) -> str:
+    """Return a display symbol that is safe for the current terminal encoding.
+
+    Supported names: ``check``, ``cross``, ``warning``, ``circle``.
+    """
+    symbols = _SYMBOLS_UNICODE if _supports_unicode() else _SYMBOLS_ASCII
+    return symbols.get(name, name)
+
+
 def _format_cell_value(value: Any) -> str:
     """Format a cell value for table display."""
     if value is None:
         return ""
     if isinstance(value, bool):
-        return "\u2713" if value else "\u2717"
+        return safe_symbol("check") if value else safe_symbol("cross")
     if isinstance(value, (dict, list)):
         return json.dumps(value, ensure_ascii=False)
     return str(value)
@@ -218,7 +245,7 @@ def print_warning(message: str):
 
 def print_success(message: str):
     """Print success message to stderr."""
-    print(f"\u2713 {message}", file=sys.stderr)
+    print(f"{safe_symbol('check')} {message}", file=sys.stderr)
 
 
 def print_info(message: str):
